@@ -172,7 +172,7 @@ def heur (mr,namefile):
         data = np.array([a1, a2, a3, a9, a6, a7, a4, a5, a8, a10])
         for k in range(1, len(objList), 96):
             ob = sum(objList[k:k+96])
-        objFinal.append(round(ob,2))
+        objFinal.append(ob)
         
 
         for k in range(1, len(runList), 96):

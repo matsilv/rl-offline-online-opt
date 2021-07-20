@@ -47,15 +47,15 @@ def check_env():
 
         while not done:
             env.render(mode='ascii')
-            action = env.action_space.sample()
+            action = env.cGrid.copy()
             print('\nAction')
             print(tabulate(np.expand_dims(action, axis=0), headers=timestamps, tablefmt='pretty'))
             step = env.step(action)
 
-            cost, _ = heur(instance_idx, 'instancesRealizations.csv')
-            assert cost == -step.reward, "Cost computed by heur() method and reward are different"
-
             done = step.terminal
+
+    cost, _ = heur(instance_idx, 'instancesRealizations.csv')
+    assert cost == -step.reward, "Cost computed by heur() method and reward are different"
 
     env.close()
 
@@ -111,7 +111,7 @@ def check_markovian_env():
 
 
 # NOTE: set the logdir
-@wrap_experiment(log_dir='gaussian-vpg/single-instance-abs-cgrid')
+@wrap_experiment(log_dir='gaussian-vpg/single-instance-abs-cgrid', archive_launch_repo=False, use_existing_dir=True)
 def train_rl_algo(ctxt=None, test_split=0.25, num_epochs=1000):
 
     # A trainer provides a default TensorFlow session using python context
@@ -133,7 +133,7 @@ def train_rl_algo(ctxt=None, test_split=0.25, num_epochs=1000):
             train_predictions = predictions.iloc[split_index]
             train_realizations = realizations.iloc[split_index]
         else:
-            raise Exception("test_split must be int or float")
+            raise Exception("test_split must be list of int or float")
 
         # Create the environment
         env = VPPEnv(predictions=train_predictions,
@@ -244,6 +244,6 @@ def test_rl_algo():
 ########################################################################################################################
 
 if __name__ == '__main__':
-    check_env()
-    # train_rl_algo(test_split=[0], num_epochs=1000)
+    # check_env()
+    train_rl_algo(test_split=[0], num_epochs=1)
     # check_markovian_env()

@@ -181,8 +181,6 @@ class VPPEnv(Env):
         # Enforce action space
         # NOTE: we MUST copy the action before modifying it
         c_virt = action.copy()
-        # c_virt = np.clip(c_virt, self.action_space.low, np.max(self.cGrid))
-        c_virt = np.abs(c_virt)
 
         # NOTE: this is a copy and paste of the heur() method
 
