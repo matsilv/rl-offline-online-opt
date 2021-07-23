@@ -19,4 +19,4 @@ if __name__ == '__main__':
 
     mr = int(mr)
     
-    onHeur.heur(mr,fileName)
+    onHeur.heur(mr,fileName, savepath=None)

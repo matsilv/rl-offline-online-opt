@@ -38,7 +38,7 @@ def solve(mod):
         exit(0)
 
 #greedy heuristic
-def heur (mr,namefile):
+def heur (mr,namefile, savepath=None):
     
     #timestamp
     n = 96

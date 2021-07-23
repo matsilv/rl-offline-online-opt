@@ -4,6 +4,8 @@ import numpy as np
 import pandas as pd
 import random
 import sys
+from rl_utils import timestamps_headers
+from tabulate import tabulate
 
 
 # Optimize VPP planning Model
@@ -21,7 +23,12 @@ def solve(mod):
         exit(0)
 
 #greedy heuristic
-def heur (mr,namefile):
+def heur (mr,namefile, savepath):
+
+    # NOTE: create the directory where the gurobi models are saved to
+    if savepath is not None:
+        if not os.path.exists(savepath):
+            os.makedirs(savepath)
     
     #timestamp
     n = 96
@@ -125,9 +132,12 @@ def heur (mr,namefile):
             obf = (cGrid[i]*pGridOut[i]+cDiesel*pDiesel[i]-cGridSt[i]*pStorageIn[i]+cGridSt[i]*pStorageOut[i]-cGrid[i]*pGridIn[i]+cGridS*change[i])
         
             mod.setObjective(obf)
-            
-            
+
             solve(mod)
+
+            # NOTE: save the gurobi models
+            if savepath is not None:
+                mod.write(os.path.join(savepath, f'model{i}.lp'))
 
             runList.append(mod.Runtime*60)
             runtime += mod.Runtime*60
@@ -156,7 +166,7 @@ def heur (mr,namefile):
         data = np.array([a1, a2, a3, a9, a6, a7, a4, a5, a8, a10])
         for k in range(1, len(objList), 96):
             ob = sum(objList[k:k+96])
-        objFinal.append(round(ob,2))
+        objFinal.append(ob)
         
 
         for k in range(1, len(runList), 96):
@@ -166,13 +176,42 @@ def heur (mr,namefile):
 
 
         print("\n============================== Solutions of Instance %d  =================================\n\n" %(mr))
-        
+
+        objFinal = np.mean(objFinal)
+
         print("The solution cost (in keuro) is: %s\n" %(str(np.mean(objFinal))))
         print("The runtime (in sec) is: %s\n" %(str(np.mean(runFinal))))
 
-        print(a4)
-        print(a5)
-        print(a8)
+        timestamps = timestamps_headers(num_timeunits=96)
+        table = list()
+
+        diesel_power_consumptions = a2.copy()
+        diesel_power_consumptions.insert(0, 'pDiesel')
+        table.append(diesel_power_consumptions)
+
+        storage_consumptions = a4.copy()
+        storage_consumptions.insert(0, 'pStorageIn')
+        table.append(storage_consumptions)
+
+        storage_charging = a5.copy()
+        storage_charging.insert(0, 'pStorageOut')
+        table.append(storage_charging)
+
+        energy_sold = a6.copy()
+        energy_sold.insert(0, 'pGridIn')
+        table.append(energy_sold)
+
+        energy_bought = a7.copy()
+        energy_bought.insert(0, 'pGridOut')
+        table.append(energy_bought)
+
+        storage_capacity = a8.copy()
+        storage_capacity.insert(0, 'cap')
+        table.append(storage_capacity)
+
+        print(tabulate(table, headers=timestamps, tablefmt='pretty'))
+
+        return objFinal, objList
 
 
 
