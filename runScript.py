@@ -7,7 +7,7 @@ import numpy as np
 import pandas as pd
 import random
 import sys
-import OnlineHeuristic2 as onHeur
+import OnlineHeuristic as onHeur
 
 
 if __name__ == '__main__':

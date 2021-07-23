@@ -8,7 +8,6 @@ from gurobipy import Model, GRB
 from OnlineHeuristic import solve
 from tabulate import tabulate
 from datetime import datetime, timedelta
-import os
 
 ########################################################################################################################
 
@@ -68,14 +67,12 @@ class VPPEnv(Env):
                  predictions,
                  realizations,
                  cGrid,
-                 shift,
-                 savepath=None):
+                 shift):
         """
         :param predictions: pandas.Dataframe; predicted PV and Load.
         :param realizations: pandas.Dataframe; real PV and Load.
         :param cGrid: numpy.array; cGrid values.
         :param shift: numpy.array; shift values.
-        :param savepath: string; where the gurobi models are saved to.
         """
 
         # Number of timesteps in 1 hour
@@ -84,18 +81,17 @@ class VPPEnv(Env):
         # NOTE: this must be 1 because we solve once instance at a time
         self.mrT = 1
 
+        # These are variables related to the optimization model
         self.predictions = predictions
         self.realizations = realizations
         self.predictions = instances_preprocessing(self.predictions)
         self.realizations = instances_preprocessing(self.realizations)
         self.cGrid = cGrid
         self.shift = shift
-        self.savepath = savepath
-
-        # Create the directory where the gurobi models are saved to
-        if savepath is not None:
-            if not os.path.exists(savepath):
-                os.makedirs(savepath)
+        self.capMax = 1000
+        self.inCap = 800
+        self.cDiesel = 0.054
+        self.pDieselMax = 1200
 
         # NOTE: here we define the observation and action spaces
         self.observation_space = Box(low=0, high=np.inf, shape=(self.n * 2,), dtype=np.float32)
@@ -107,9 +103,6 @@ class VPPEnv(Env):
         self.mr = random.randint(self.predictions.index.min(), self.predictions.index.max())
 
         self._create_instance_variables()
-
-        # NOTE: store the last action
-        self.last_action = None
 
     def _create_instance_variables(self):
         """
@@ -135,15 +128,7 @@ class VPPEnv(Env):
         self.tot_cons_real = [self.realizations['Load(kW)'][self.mr] for i in range(self.mrT)]
         self.tot_cons_real = np.asarray(self.tot_cons_real)
 
-    def _render_solution(self,
-                         objFinal,
-                         runFinal,
-                         diesel_power_consumptions,
-                         storage_consumptions,
-                         storage_charging,
-                         energy_sold,
-                         energy_bought,
-                         storage_capacity):
+    def _render_solution(self, objFinal, runFinal):
         """
         Solution visualization.
         :param objFinal: list of float; the final cost for each instance.
@@ -156,33 +141,6 @@ class VPPEnv(Env):
 
         print("The solution cost (in keuro) is: %s\n" % (str(np.mean(objFinal))))
         print("The runtime (in sec) is: %s\n" % (str(np.mean(runFinal))))
-
-        timestamps = timestamps_headers(num_timeunits=96)
-        table = list()
-
-        diesel_power_consumptions.insert(0, 'pDiesel')
-        table.append(diesel_power_consumptions)
-
-        storage_consumptions.insert(0, 'pStorageIn')
-        table.append(storage_consumptions)
-
-        storage_charging.insert(0, 'pStorageOut')
-        table.append(storage_charging)
-
-        energy_sold.insert(0, 'pGridIn')
-        table.append(energy_sold)
-
-        energy_bought.insert(0, 'pGridOut')
-        table.append(energy_bought)
-
-        storage_capacity.insert(0, 'cap')
-        table.append(storage_capacity)
-
-        self.last_action = list(self.last_action)
-        self.last_action.insert(0, 'c_virt')
-        table.append(self.last_action)
-
-        print(tabulate(table, headers=timestamps, tablefmt='pretty'))
 
     def _get_observations(self):
         """
@@ -205,15 +163,38 @@ class VPPEnv(Env):
         self.tot_cons_pred = None
         self.tot_cons_real = None
         self.mr = None
-        self.last_action = None
 
-    def step(self, action):
+    def _define_obj_function(self, model, c_virt, index):
         """
-        This is a step performed in the environment: the virtual costs are set by the agent and then the total cost
-        (the reward) is computed.
-        :param action: numpy.array of shape (num_timesteps, ); virtual costs for each timestep.
-        :return: dict, float, boolean, dict; the observations, the reward, a boolean that is True if the episode is
-                                             ended, additional information.
+        Given a model, define the VPP cost function for a given timestep.
+        :param model: gurobipy.Model; variables and constraints of the VPP model.
+        :param c_virt: numpy.array; if not None, the virtual costs are multiplied to the output eletricity
+                                    from the storage.
+        :param index: int; the timestep.
+        :return:
+        """
+
+        # Objective function
+        # NOTE: the action are the virtual costs associated with the storage
+        if c_virt is None:
+            storage_cost = self.cGrid
+        else:
+            storage_cost = c_virt
+
+        obf = (self.cGrid[index] * model.getVarByName['pGridOut_' + str(index)] +
+               self.cDiesel * model.getVarByName['pDiesel_' + str(index)] +
+               storage_cost[index] * model.getVarByName['pStorageIn_' + str(index)] -
+               self.cGrid[index] * model.getVarByName['pGridIn_' + str(index)])
+
+        return obf
+
+    def _solve(self, c_virt=None):
+        """
+        Solve the optimization model with the greedy heuristic. If the virtual costs are set then we compute the virtual
+        objective function, otherwise the real objective function is computed.
+        :param c_virt: numpy.array of shape (num_timesteps, ); the virtual costs.
+        :return: gurobipy.Model the cost of the solution found by the heuristic and a dictionary with the found
+                                 solution.
         """
 
         # NOTE: check variables initialization
@@ -224,151 +205,110 @@ class VPPEnv(Env):
         assert self.tot_cons_real is not None, "Real Load values must be initialized before the step function"
 
         # Enforce action space
-        # NOTE: we MUST copy the action before modifying it
-        c_virt = action.copy()
         c_virt = np.clip(c_virt, self.action_space.low, self.action_space.high)
-        self.last_action = c_virt.copy()
+        cap, pDiesel, pStorageIn, pStorageOut, pGridIn, pGridOut, tilde_cons = [[None] * self.n for _ in range(7)]
 
-        # NOTE: this is a copy and paste of the heur() method
+        # Per-timestep storage capacitance
+        capX = self.inCap
 
-        # price data from GME
-        cGridS = np.mean(self.cGrid)
+        # Save all the optimization models in a list
+        models = []
 
-        # capacities, bounds, parameters and prices
-        listc = []
-        # mrT = 1
-        objX = np.zeros((self.mrT, self.n))
-        objTot = [None] * self.mrT
-        self.objList, runList, objFinal, runFinal = [[] for i in range(4)]
-        a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, cap, change, phi, notphi, pDiesel, pStorageIn, pStorageOut, pGridIn, pGridOut, tilde_cons = [
-            [None] * self.n for i in range(20)]
-        capMax = 1000
-        inCap = 800
-        capX = inCap
-        cDiesel = 0.054
-        cRU = 0.35
-        pDieselMax = 1200
-        runtime = 0
-        phiX = 0
-        solutions = np.zeros((self.mrT, self.n, 9))
+        for i in range(self.n):
+            # create a model
+            mod = Model()
 
-        # if you want to run more than one instance at a time mrT != 1
-        for j in range(self.mrT):
-            for i in range(self.n):
-                # create a model
-                mod = Model()
+            # build variables and define bounds
+            pDiesel[i] = mod.addVar(vtype=GRB.CONTINUOUS, name="pDiesel_" + str(i))
+            pStorageIn[i] = mod.addVar(vtype=GRB.CONTINUOUS, name="pStorageIn_" + str(i))
+            pStorageOut[i] = mod.addVar(vtype=GRB.CONTINUOUS, name="pStorageOut_" + str(i))
+            pGridIn[i] = mod.addVar(vtype=GRB.CONTINUOUS, name="pGridIn_" + str(i))
+            pGridOut[i] = mod.addVar(vtype=GRB.CONTINUOUS, name="pGridOut_" + str(i))
+            cap[i] = mod.addVar(vtype=GRB.CONTINUOUS, name="cap_" + str(i))
 
-                # build variables and define bounds
-                pDiesel[i] = mod.addVar(vtype=GRB.CONTINUOUS, name="pDiesel_" + str(i))
-                pStorageIn[i] = mod.addVar(vtype=GRB.CONTINUOUS, name="pStorageIn_" + str(i))
-                pStorageOut[i] = mod.addVar(vtype=GRB.CONTINUOUS, name="pStorageOut_" + str(i))
-                pGridIn[i] = mod.addVar(vtype=GRB.CONTINUOUS, name="pGridIn_" + str(i))
-                pGridOut[i] = mod.addVar(vtype=GRB.CONTINUOUS, name="pGridOut_" + str(i))
-                cap[i] = mod.addVar(vtype=GRB.CONTINUOUS, name="cap_" + str(i))
-                change[i] = mod.addVar(vtype=GRB.INTEGER, name="change")
-                phi[i] = mod.addVar(vtype=GRB.BINARY, name="phi")
-                notphi[i] = mod.addVar(vtype=GRB.BINARY, name="notphi")
+            #################################################
+            # Shift from Demand Side Energy Management System
+            #################################################
 
-                #################################################
-                # Shift from Demand Side Energy Management System
-                #################################################
+            # NOTE: the heuristic uses the real load
+            tilde_cons[i] = (self.shift[i] + self.tot_cons_real[j][i])
 
-                tilde_cons[i] = (self.shift[i] + self.tot_cons_real[j][i])
+            ####################
+            # Model constraints
+            ####################
 
-                ####################
-                # Model constraints
-                ####################
+            # power balance constraint
+            # NOTE: the heuristic uses the real PV
+            mod.addConstr((self.pRenPVreal[j][i] + pStorageOut[i] + pGridOut[i] + pDiesel[i] -
+                           pStorageIn[i] - pGridIn[i] == tilde_cons[i]), "Power balance")
 
-                # more sophisticated storage constraints
-                mod.addConstr(notphi[i] == 1 - phi[i])
-                mod.addGenConstrIndicator(phi[i], True, pStorageOut[i], GRB.LESS_EQUAL, 0)
-                mod.addGenConstrIndicator(notphi[i], True, pStorageIn[i], GRB.LESS_EQUAL, 0)
+            # Storage cap
+            mod.addConstr(cap[i] == capX + pStorageIn[i] - pStorageOut[i])
+            mod.addConstr(cap[i] <= self.capMax)
 
-                # power balance constraint
-                mod.addConstr((self.pRenPVreal[j][i] + pStorageOut[i] + pGridOut[i] + pDiesel[i] - pStorageIn[i] -
-                               pGridIn[i] == tilde_cons[i]), "Power balance")
+            mod.addConstr(pStorageIn[i] <= self.capMax - capX)
+            mod.addConstr(pStorageOut[i] <= capX)
 
-                # Storage cap
-                mod.addConstr(cap[i] == capX + pStorageIn[i] - pStorageOut[i])
-                mod.addConstr(cap[i] <= capMax)
+            mod.addConstr(pStorageIn[i] <= 200)
+            mod.addConstr(pStorageOut[i] <= 200)
 
-                mod.addConstr(pStorageIn[i] <= capMax - (capX))
-                mod.addConstr(pStorageOut[i] <= capX)
+            # Diesel and Net cap
+            mod.addConstr(pDiesel[i] <= self.pDieselMax)
+            mod.addConstr(pGridIn[i] <= 600)
 
-                mod.addConstr(pStorageIn[i] <= 200)
-                mod.addConstr(pStorageOut[i] <= 200)
+            # for using storage constraints for mode change we have to add cRU*change in the objective function
+            obf = self._define_obj_function(mod, c_virt, i)
+            mod.setObjective(obf)
 
-                # Diesel and Net cap
-                mod.addConstr(pDiesel[i] <= pDieselMax)
-                mod.addConstr(pGridIn[i] <= 600)
+            solve(mod)
 
-                # Storage mode change
-                mod.addConstr(change[i] >= 0)
-                mod.addConstr(change[i] >= (phi[i] - phiX))
-                mod.addConstr(change[i] >= (phiX - phi[i]))
+            models.append(mod)
 
-                # Objective function
-                obf = (self.cGrid[i]*pGridOut[i]+cDiesel*pDiesel[i]-c_virt[i]*pStorageIn[i]+
-                       self.cGrid[i]*pStorageOut[i]-self.cGrid[i]*pGridIn[i]+cGridS*change[i])
+        return models
 
-                mod.setObjective(obf)
+    def _compute_real_cost(self, models):
+        """
+        Given a solution, compute the real costs.
+        :param solution: dict; a dictionary with the solution.
+        :return: float; the real cost of the given solution.
+        """
 
-                solve(mod)
+        cost = 0
 
-                # NOTE: save the gurobi model in lp format
-                if self.savepath is not None:
-                    mod.write(os.path.join(self.savepath, f'model{i}.lp'))
+        for timestep in enumerate(models):
+            model = models[timestep]
+            optimal_pGridOut = model.getVarByName['pGridOut_' + str(timestep)]
+            optimal_pDiesel = model.getVarByName['pDiesel_' + str(timestep)]
+            optimal_pStorageIn = model.getVarByName['pStorageIn_' + str(timestep)]
+            optimal_pGridIn = model.getVarByName['pGridIn_' + str(timestep)]
+            cost += (self.cGrid[timestep] * optimal_pGridOut + self.cDiesel * optimal_pDiesel +
+                     self.cGrid[timestep] * optimal_pStorageIn - self.cGrid[timestep] * optimal_pGridIn)
 
-                runList.append(mod.Runtime * 60)
-                runtime += mod.Runtime * 60
+        return cost
 
-                # extract x values
-                a2[i] = pDiesel[i].X
-                a4[i] = pStorageIn[i].X
-                a5[i] = pStorageOut[i].X
-                a3[i] = self.pRenPVreal[j][i]
-                a6[i] = pGridIn[i].X
-                a7[i] = pGridOut[i].X
-                a8[i] = cap[i].X
-                a1[i] = tilde_cons[i]
-                objX[j][i] = mod.objVal
-                a9[i] = self.cGrid[i]
-                capX = cap[i].x
-                listc.append(capX)
-                # phiX = phi[i].x
+    def step(self, action):
+        """
+        This is a step performed in the environment: the virtual costs are set by the agent and then the total cost
+        (the reward) is computed.
+        :param action: numpy.array of shape (num_timesteps, ); virtual costs for each timestep.
+        :return: dict, float, boolean, dict; the observations, the reward, a boolean that is True if the episode is
+                                             ended, additional information.
+        """
 
-                solutions[j][i] = [mod.objVal, a3[i], a1[i], capX, a2[i], a4[i], a5[i], a6[i], a7[i]]
+        # Solve the optimization model with the virtual costs
+        models = self._solve(action)
 
-                self.objList.append((objX[j][i]))
-
-            a10 = self.shift
-            data = np.array([a1, a2, a3, a9, a6, a7, a4, a5, a8, a10])
-            for k in range(1, len(self.objList), 96):
-                ob = sum(self.objList[k:k + 96])
-            objFinal.append(ob)
-
-            for k in range(1, len(runList), 96):
-                run = sum(runList[k:k + 96])
-            runFinal.append(round(run, 2))
-
-        # NOTE: the reward is the negative cost
-        reward = -np.mean(objFinal)
+        # NOTE: the reward is the negative real cost cost
+        reward = -self._compute_real_cost(models)
 
         # NOTE: the episode has a single timestep
         done = True
 
-        self._render_solution(objFinal,
-                              runFinal,
-                              diesel_power_consumptions=a2,
-                              storage_consumptions=a4,
-                              storage_charging=a5,
-                              energy_sold=a6,
-                              energy_bought=a7,
-                              storage_capacity=a8)
+        # self._render_solution(objFinal, runFinal)
 
         observations = self._get_observations()
 
-        return observations, reward, done, {'action': c_virt}
+        return observations, reward, done, {}
 
     def reset(self):
         """
@@ -390,6 +330,8 @@ class VPPEnv(Env):
         """
 
         timestamps = timestamps_headers(self.n)
+        print('\nAction')
+        print(tabulate(self.action, headers=timestamps, tablefmt='pretty'))
         print('\nPredicted PV(kW)')
         print(tabulate(self.pRenPVpred, headers=timestamps, tablefmt='pretty'))
         print('\nPredicted Load(kW)')
@@ -736,6 +678,7 @@ class MarkovianVPPEnv(Env):
         :return:
         """
         pass
+
 
 
 ########################################################################################################################

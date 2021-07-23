@@ -129,7 +129,7 @@ def heur (mr,namefile, savepath):
             mod.addConstr(change[i]>= (phiX - phi[i]))
 
         #Objective function
-            obf = (cGrid[i]*pGridOut[i]+cDiesel*pDiesel[i]-cGridSt[i]*pStorageIn[i]+cGridSt[i]*pStorageOut[i]-cGrid[i]*pGridIn[i]+cGridS*change[i])
+            obf = (cGrid[i]*pGridOut[i]+cDiesel*pDiesel[i]+cGridSt[i]*pStorageIn[i]-cGrid[i]*pGridIn[i]+cGridS*change[i])
         
             mod.setObjective(obf)
 
