@@ -1,7 +1,8 @@
 from rl_utils import VPPEnv, MarkovianVPPEnv, timestamps_headers
-from OnlineHeuristic2 import heur
+import OnlineHeuristic
 from tabulate import tabulate
 import numpy as np
+from numpy.testing import assert_almost_equal
 import pandas as pd
 from garage.np.baselines import LinearFeatureBaseline
 from garage.sampler import LocalSampler
@@ -13,6 +14,7 @@ from garage.envs import GymEnv
 import tensorflow as tf
 import cloudpickle
 import os
+import random
 
 ########################################################################################################################
 
@@ -25,33 +27,44 @@ def check_env(num_episodes=1, gurobi_models_dir=None):
     :return:
     """
 
-    # Load predictions, realizations, shifts and prices
+    random.seed(0)
+
+    # Load predictions, shifts and prices
     predictions = pd.read_csv('instancesPredictions.csv')
-    realizations = pd.read_csv('instancesRealizations.csv')
+    predictions = predictions.iloc[:1]
     shift = np.load('optShift.npy')
     cGrid = np.load('gmePrices.npy')
 
     # Create the environment and a garage wrapper for Gym environments
     env = VPPEnv(predictions=predictions,
-                 realizations=realizations,
                  shift=shift,
                  cGrid=cGrid,
+                 noise_std_dev=0,
                  savepath=os.path.join(gurobi_models_dir, 'env'))
     env = GymEnv(env)
 
     # Timestamps headers for visualization
     timestamps = timestamps_headers(env.n)
 
+    # Save all the costs and rewards to check that are equals
+    all_costs = []
+    all_rewards = []
+
     # Run the episodes
     for i_episode in range(num_episodes):
 
+        print(f'Episode: {i_episode+1}/{num_episodes}')
+
+        # Reset the environment and get the instance index
         env.reset()
         instance_idx = env.mr
 
         done = False
 
         while not done:
+            print()
             env.render(mode='ascii')
+            # To check the correctness of the implementation, we simply set the cGrid as action
             action = env.cGrid.copy()
             print('\nAction')
             print(tabulate(np.expand_dims(action, axis=0), headers=timestamps, tablefmt='pretty'))
@@ -59,11 +72,17 @@ def check_env(num_episodes=1, gurobi_models_dir=None):
 
             done = step.terminal
 
-    cost, objList = heur(instance_idx,
-                         'instancesRealizations.csv',
-                         os.path.join(gurobi_models_dir, 'heur'))
+        cost, objList = OnlineHeuristic.heur(pRenPV=np.expand_dims(env.pRenPVreal, axis=0),
+                                             tot_cons=np.expand_dims(env.tot_cons_real, axis=0))
 
-    assert cost == -step.reward, "Cost computed by heur() method and reward are different"
+        all_rewards.append(-step.reward)
+        all_costs.append(cost)
+
+        print(f'Heuristic cost: {cost} | Reward: {-step.reward}')
+
+        print('-'*100 + '\n')
+
+    assert_almost_equal(all_rewards, all_costs, decimal=10), "Cost computed by heur() method and reward are different"
 
     env.close()
 
@@ -119,17 +138,24 @@ def check_markovian_env():
 
 
 # NOTE: set the logdir
-@wrap_experiment(log_dir='gaussian-vpg/single-instance-sigmoid-cgrid',
+@wrap_experiment(log_dir=os.path.join('gaussian-vpg', 'experiment-1'),
                  archive_launch_repo=False,
                  use_existing_dir=True)
 def train_rl_algo(ctxt=None, test_split=0.25, num_epochs=1000):
+    """
+
+    :param ctxt: garage.experiment.SnapshotConfig; the snapshot configuration used by Trainer to create the snapshotter.
+                                                   If None, it will create one with default settings.
+    :param test_split: float; float or list of int; fraction or indexes of the instances to be used for test.
+    :param num_epochs: int; number of training epochs.
+    :return:
+    """
 
     # A trainer provides a default TensorFlow session using python context
     with TFTrainer(snapshot_config=ctxt) as trainer:
 
         # Load data from file
         predictions = pd.read_csv('instancesPredictions.csv')
-        realizations = pd.read_csv('instancesRealizations.csv')
         shift = np.load('optShift.npy')
         cGrid = np.load('gmePrices.npy')
 
@@ -137,25 +163,24 @@ def train_rl_algo(ctxt=None, test_split=0.25, num_epochs=1000):
         if isinstance(test_split, float):
             split_index = int(len(predictions) * (1 - test_split))
             train_predictions = predictions[:split_index]
-            train_realizations = realizations[:split_index]
         elif isinstance(test_split, list):
             split_index = test_split
             train_predictions = predictions.iloc[split_index]
-            train_realizations = realizations.iloc[split_index]
         else:
             raise Exception("test_split must be list of int or float")
 
         # Create the environment
         env = VPPEnv(predictions=train_predictions,
-                     realizations=train_realizations,
                      shift=shift,
-                     cGrid=cGrid)
+                     cGrid=cGrid,
+                     noise_std_dev=0.05,
+                     savepath=None)
 
-        # garage wrapping of a gym environment
+        # Garage wrapping of a gym environment
         env = GymEnv(env, max_episode_length=1)
 
         # A policy represented by a Gaussian distribution which is parameterized by a multilayer perceptron (MLP)
-        policy = GaussianMLPPolicy(env.spec, output_nonlinearity=tf.nn.sigmoid)
+        policy = GaussianMLPPolicy(env.spec)
 
         # A linear value function (baseline) based on features
         baseline = LinearFeatureBaseline(env_spec=env.spec)
@@ -176,53 +201,72 @@ def train_rl_algo(ctxt=None, test_split=0.25, num_epochs=1000):
                    optimizer_args=dict(learning_rate=0.01, ))
 
         trainer.setup(algo, env)
-        trainer.train(n_epochs=num_epochs, batch_size=1000, plot=False)
+        trainer.train(n_epochs=num_epochs, batch_size=100, plot=False)
 
 
 ########################################################################################################################
 
 
-def test_rl_algo():
-    test_split = 0.25
+def test_rl_algo(log_dir, test_split=0.25):
+    """
+    Test a trained agent.
+    :param log_dir: string; path where training information are saved to.
+    :param test_split: float or list of int; fraction or indexes of the instances to be used for test.
+    :return:
+    """
 
     # Load data from file
     predictions = pd.read_csv('instancesPredictions.csv')
-    realizations = pd.read_csv('instancesRealizations.csv')
     shift = np.load('optShift.npy')
     cGrid = np.load('gmePrices.npy')
 
     # Split between training and test
-    split_index = int(len(predictions) * (1 - test_split))
-    train_predictions = predictions[:split_index]
-    train_realizations = realizations[:split_index]
-    test_predictions = predictions[split_index:]
-    test_realizations = realizations[split_index:]
+    if isinstance(test_split, float):
+        split_index = int(len(predictions) * (1 - test_split))
+        train_predictions = predictions[:split_index]
+    elif isinstance(test_split, list):
+        split_index = test_split
+        train_predictions = predictions.iloc[split_index]
+    else:
+        raise Exception("test_split must be list of int or float")
 
+    # Create TF1 session and load all the experiments data
     tf.compat.v1.disable_eager_execution()
     tf.compat.v1.reset_default_graph()
     with tf.compat.v1.Session() as sess:
-        data = cloudpickle.load(open('gaussian-vpg/single-instance-sigmoid/params.pkl', 'rb'))
+        data = cloudpickle.load(open(os.path.join(log_dir, 'params.pkl'), 'rb'))
+        # Get the agent
         algo = data['algo']
-        env = VPPEnv(predictions=test_predictions,
-                     realizations=test_realizations,
+        # Create an environment without noise
+        env = VPPEnv(predictions=train_predictions,
                      shift=shift,
-                     cGrid=cGrid)
-
+                     cGrid=cGrid,
+                     noise_std_dev=0,
+                     savepath=None)
         last_obs = env.reset()
+
         policy = algo.policy
         policy.reset()
+
         episode_length = 0
+
         timestamps = timestamps_headers(env.n)
 
+        # Perform an episode
         while episode_length < np.inf:
             env.render(mode='ascii')
+
             a, agent_info = policy.get_action(last_obs)
             a = agent_info['mean']
-
-            print('Action')
+            print('\nAction')
             print(tabulate(np.expand_dims(a, axis=0), headers=timestamps, tablefmt='pretty'))
+
             obs, reward, done, info = env.step(a)
+
+            print(f'\nCost: {-reward}')
+
             episode_length += 1
+
             if done:
                 break
             last_obs = obs
@@ -248,8 +292,7 @@ def resume_experiment(ctxt, saved_dir):
 
 
 if __name__ == '__main__':
-    # check_env(gurobi_models_dir='gurobi-models')
-    train_rl_algo(test_split=[0], num_epochs=1000)
+    check_env(num_episodes=200, gurobi_models_dir='gurobi-models')
+    #train_rl_algo(test_split=[0], num_epochs=25)
     # check_markovian_env()
-    # test_rl_algo()
-    # resume_experiment(saved_dir='gaussian-vpg/single-instance-sigmoid')
+    #test_rl_algo(log_dir=os.path.join('gaussian-vpg', 'experiment-1'))

@@ -1,8 +1,6 @@
 from gym import Env
 from gym.spaces import Box
-import akro
 import numpy as np
-import pandas as pd
 import random
 from gurobipy import Model, GRB
 from OnlineHeuristic import solve
@@ -65,27 +63,30 @@ class VPPEnv(Env):
 
     def __init__(self,
                  predictions,
-                 realizations,
                  cGrid,
-                 shift):
+                 shift,
+                 noise_std_dev=0.05,
+                 savepath=None):
         """
         :param predictions: pandas.Dataframe; predicted PV and Load.
-        :param realizations: pandas.Dataframe; real PV and Load.
         :param cGrid: numpy.array; cGrid values.
         :param shift: numpy.array; shift values.
+        :param noise_std_dev: float; the standard deviation of the additive gaussian noise.
+        :param savepath: string; if not None, the gurobi models are saved to this directory.
         """
+
+        # Set numpy random seed to ensure reproducibility
+        np.random.seed(8)
 
         # Number of timesteps in 1 hour
         self.n = 96
 
-        # NOTE: this must be 1 because we solve once instance at a time
-        self.mrT = 1
+        # Standard deviation of the additive gaussian noise
+        self.noise_std_dev = noise_std_dev
 
         # These are variables related to the optimization model
         self.predictions = predictions
-        self.realizations = realizations
         self.predictions = instances_preprocessing(self.predictions)
-        self.realizations = instances_preprocessing(self.realizations)
         self.cGrid = cGrid
         self.shift = shift
         self.capMax = 1000
@@ -93,14 +94,14 @@ class VPPEnv(Env):
         self.cDiesel = 0.054
         self.pDieselMax = 1200
 
-        # NOTE: here we define the observation and action spaces
+        # Here we define the observation and action spaces
         self.observation_space = Box(low=0, high=np.inf, shape=(self.n * 2,), dtype=np.float32)
         self.action_space = Box(low=-np.inf, high=np.inf, shape=(self.n,), dtype=np.float32)
 
-        # NOTE: we randomly choose an instance
-        assert len(self.predictions) == len(self.realizations), "Predictions and realizations must have the same length"
-        assert self.predictions.index.equals(self.realizations.index)
+        # We randomly choose an instance
         self.mr = random.randint(self.predictions.index.min(), self.predictions.index.max())
+
+        self.savepath = savepath
 
         self._create_instance_variables()
 
@@ -113,20 +114,25 @@ class VPPEnv(Env):
         assert self.mr is not None, "Instance index must be initialized"
 
         # predicted PV for the current instance
-        self.pRenPVpred = [self.predictions['PV(kW)'][self.mr] for i in range(self.mrT)]
+        self.pRenPVpred = self.predictions['PV(kW)'][self.mr]
         self.pRenPVpred = np.asarray(self.pRenPVpred)
 
         # predicted Load for the current instance
-        self.tot_cons_pred = [self.predictions['Load(kW)'][self.mr] for i in range(self.mrT)]
+        self.tot_cons_pred = self.predictions['Load(kW)'][self.mr]
         self.tot_cons_pred = np.asarray(self.tot_cons_pred)
 
-        # real PV for the current instance
-        self.pRenPVreal = [self.realizations['PV(kW)'][self.mr] for i in range(self.mrT)]
-        self.pRenPVreal = np.asarray(self.pRenPVreal)
+        feasible = False
 
-        # real Load for the current instance
-        self.tot_cons_real = [self.realizations['Load(kW)'][self.mr] for i in range(self.mrT)]
-        self.tot_cons_real = np.asarray(self.tot_cons_real)
+        while not feasible:
+            # The real PV for the current instance is computed adding noise to the predictions
+            noise = np.random.normal(0, self.noise_std_dev, self.n)
+            self.pRenPVreal = self.pRenPVpred + self.pRenPVpred * noise
+
+            # The real Load for the current instance is computed adding noise to the predictions
+            noise = np.random.normal(0, self.noise_std_dev, self.n)
+            self.tot_cons_real = self.tot_cons_pred + self.tot_cons_pred * noise
+
+            _, feasible = self._solve(c_virt=self.cGrid)
 
     def _render_solution(self, objFinal, runFinal):
         """
@@ -148,7 +154,7 @@ class VPPEnv(Env):
         :return: numpy.array; pv and load values for the current instance.
         """
 
-        observations = np.concatenate((self.pRenPVpred.copy(), self.tot_cons_pred.copy()), axis=1)
+        observations = np.concatenate((self.pRenPVpred.copy(), self.tot_cons_pred.copy()), axis=0)
         observations = np.squeeze(observations)
 
         return observations
@@ -164,37 +170,11 @@ class VPPEnv(Env):
         self.tot_cons_real = None
         self.mr = None
 
-    def _define_obj_function(self, model, c_virt, index):
+    def _solve(self, c_virt):
         """
-        Given a model, define the VPP cost function for a given timestep.
-        :param model: gurobipy.Model; variables and constraints of the VPP model.
-        :param c_virt: numpy.array; if not None, the virtual costs are multiplied to the output eletricity
-                                    from the storage.
-        :param index: int; the timestep.
-        :return:
-        """
-
-        # Objective function
-        # NOTE: the action are the virtual costs associated with the storage
-        if c_virt is None:
-            storage_cost = self.cGrid
-        else:
-            storage_cost = c_virt
-
-        obf = (self.cGrid[index] * model.getVarByName['pGridOut_' + str(index)] +
-               self.cDiesel * model.getVarByName['pDiesel_' + str(index)] +
-               storage_cost[index] * model.getVarByName['pStorageIn_' + str(index)] -
-               self.cGrid[index] * model.getVarByName['pGridIn_' + str(index)])
-
-        return obf
-
-    def _solve(self, c_virt=None):
-        """
-        Solve the optimization model with the greedy heuristic. If the virtual costs are set then we compute the virtual
-        objective function, otherwise the real objective function is computed.
-        :param c_virt: numpy.array of shape (num_timesteps, ); the virtual costs.
-        :return: gurobipy.Model the cost of the solution found by the heuristic and a dictionary with the found
-                                 solution.
+        Solve the optimization model with the greedy heuristic.
+        :param c_virt: numpy.array of shape (num_timesteps, ); the virtual costs multiplied to output storage variable.
+        :return: list of gurobipy.Model; a list with the solved optimization model.
         """
 
         # NOTE: check variables initialization
@@ -208,7 +188,7 @@ class VPPEnv(Env):
         c_virt = np.clip(c_virt, self.action_space.low, self.action_space.high)
         cap, pDiesel, pStorageIn, pStorageOut, pGridIn, pGridOut, tilde_cons = [[None] * self.n for _ in range(7)]
 
-        # Per-timestep storage capacitance
+        # Initialize the storage capacitance
         capX = self.inCap
 
         # Save all the optimization models in a list
@@ -231,15 +211,15 @@ class VPPEnv(Env):
             #################################################
 
             # NOTE: the heuristic uses the real load
-            tilde_cons[i] = (self.shift[i] + self.tot_cons_real[j][i])
+
+            tilde_cons[i] = (self.shift[i] + self.tot_cons_real[i])
 
             ####################
             # Model constraints
             ####################
 
             # power balance constraint
-            # NOTE: the heuristic uses the real PV
-            mod.addConstr((self.pRenPVreal[j][i] + pStorageOut[i] + pGridOut[i] + pDiesel[i] -
+            mod.addConstr((self.pRenPVreal[i] + pStorageOut[i] + pGridOut[i] + pDiesel[i] -
                            pStorageIn[i] - pGridIn[i] == tilde_cons[i]), "Power balance")
 
             # Storage cap
@@ -257,30 +237,39 @@ class VPPEnv(Env):
             mod.addConstr(pGridIn[i] <= 600)
 
             # for using storage constraints for mode change we have to add cRU*change in the objective function
-            obf = self._define_obj_function(mod, c_virt, i)
+
+            obf = (self.cGrid[i] * pGridOut[i] + self.cDiesel * pDiesel[i] +
+                   c_virt[i] * pStorageIn[i] - self.cGrid[i] * pGridIn[i])
             mod.setObjective(obf)
 
-            solve(mod)
+            feasible = solve(mod)
+
+            # If one of the timestep is not feasible, get out of the loop
+            if not feasible:
+                break
 
             models.append(mod)
 
-        return models
+            # Update the storage capacitance
+            capX = cap[i].X
+
+        return models, feasible
 
     def _compute_real_cost(self, models):
         """
-        Given a solution, compute the real costs.
-        :param solution: dict; a dictionary with the solution.
+        Given a list of models, one for each timestep, the method returns the real cost value.
+        :param models: list of gurobipy.Model; a list with an optimization model for each timestep.
         :return: float; the real cost of the given solution.
         """
 
         cost = 0
 
-        for timestep in enumerate(models):
-            model = models[timestep]
-            optimal_pGridOut = model.getVarByName['pGridOut_' + str(timestep)]
-            optimal_pDiesel = model.getVarByName['pDiesel_' + str(timestep)]
-            optimal_pStorageIn = model.getVarByName['pStorageIn_' + str(timestep)]
-            optimal_pGridIn = model.getVarByName['pGridIn_' + str(timestep)]
+        for timestep, model in enumerate(models):
+            optimal_pGridOut = model.getVarByName('pGridOut_' + str(timestep)).X
+            optimal_pDiesel = model.getVarByName('pDiesel_' + str(timestep)).X
+            optimal_pStorageIn = model.getVarByName('pStorageIn_' + str(timestep)).X
+            optimal_pGridIn = model.getVarByName('pGridIn_' + str(timestep)).X
+
             cost += (self.cGrid[timestep] * optimal_pGridOut + self.cDiesel * optimal_pDiesel +
                      self.cGrid[timestep] * optimal_pStorageIn - self.cGrid[timestep] * optimal_pGridIn)
 
@@ -291,17 +280,17 @@ class VPPEnv(Env):
         This is a step performed in the environment: the virtual costs are set by the agent and then the total cost
         (the reward) is computed.
         :param action: numpy.array of shape (num_timesteps, ); virtual costs for each timestep.
-        :return: dict, float, boolean, dict; the observations, the reward, a boolean that is True if the episode is
-                                             ended, additional information.
+        :return: numpy.array, float, boolean, dict; the observations, the reward, a boolean that is True if the episode
+                                                    is ended, additional information.
         """
 
         # Solve the optimization model with the virtual costs
-        models = self._solve(action)
+        models, _ = self._solve(action)
 
-        # NOTE: the reward is the negative real cost cost
+        # The reward is the negative real cost
         reward = -self._compute_real_cost(models)
 
-        # NOTE: the episode has a single timestep
+        # The episode has a single timestep
         done = True
 
         # self._render_solution(objFinal, runFinal)
@@ -312,13 +301,13 @@ class VPPEnv(Env):
 
     def reset(self):
         """
-        When we reset the environment we randomly choose another instance.
+        When we reset the environment we randomly choose another instance and we clear all the instance variables.
         :return: numpy.array; pv and load values for the current instance.
         """
 
         self._clear()
 
-        # NOTE: we randomly choose an instance
+        # We randomly choose an instance
         self.mr = random.randint(self.predictions.index.min(), self.predictions.index.max())
         self._create_instance_variables()
         return self._get_observations()
@@ -330,16 +319,14 @@ class VPPEnv(Env):
         """
 
         timestamps = timestamps_headers(self.n)
-        print('\nAction')
-        print(tabulate(self.action, headers=timestamps, tablefmt='pretty'))
         print('\nPredicted PV(kW)')
-        print(tabulate(self.pRenPVpred, headers=timestamps, tablefmt='pretty'))
+        print(tabulate(np.expand_dims(self.pRenPVpred, axis=0), headers=timestamps, tablefmt='pretty'))
         print('\nPredicted Load(kW)')
-        print(tabulate(self.tot_cons_pred, headers=timestamps, tablefmt='pretty'))
-        print('Real PV(kW)')
-        print(tabulate(self.pRenPVreal, headers=timestamps, tablefmt='pretty'))
+        print(tabulate(np.expand_dims(self.tot_cons_pred, axis=0), headers=timestamps, tablefmt='pretty'))
+        print('\nReal PV(kW)')
+        print(tabulate(np.expand_dims(self.pRenPVreal, axis=0), headers=timestamps, tablefmt='pretty'))
         print('\nReal Load(kW)')
-        print(tabulate(self.tot_cons_real, headers=timestamps, tablefmt='pretty'))
+        print(tabulate(np.expand_dims(self.tot_cons_real, axis=0), headers=timestamps, tablefmt='pretty'))
 
     def close(self):
         """

@@ -30,15 +30,20 @@ def solve(mod):
     status = mod.status
     if status == GRB.Status.INF_OR_UNBD or status == GRB.Status.INFEASIBLE \
         or status == GRB.Status.UNBOUNDED:
-        print('The model cannot be solved because it is infeasible or unbounded')
-        exit(1)
+        # print('The model cannot be solved because it is infeasible or unbounded')
+        return False
                       
     if status != GRB.Status.OPTIMAL:
-        print('Optimization was stopped with status %d' % status)
-        exit(0)
+        # print('Optimization was stopped with status %d' % status)
+        return False
+
+    return True
 
 #greedy heuristic
-def heur (mr,namefile, savepath=None):
+def heur (mr=None, namefile=None, pRenPV=None, tot_cons=None):
+
+    assert (mr is not None and namefile is not None) or (pRenPV is not None and tot_cons is not None), \
+        "You must specify either the filename from which instances are loaded or the instance itself"
     
     #timestamp
     n = 96
@@ -64,22 +69,25 @@ def heur (mr,namefile, savepath=None):
     phiX = 0
     solutions = np.zeros((mrT,n,9))
 
-    #read instances
-    instances = pd.read_csv(namefile)
-    
-    #instances pv from file
-    instances['PV(kW)'] = instances['PV(kW)'].map(lambda entry: entry[1:-1].split())
-    instances['PV(kW)'] = instances['PV(kW)'].map(lambda entry: list(np.float_(entry)))
-    pRenPV = [instances['PV(kW)'][mr] for i in range(mrT)]
-    np.asarray(pRenPV)
+    if namefile is not None:
+        #read instances
+        instances = pd.read_csv(namefile)
 
-    #instances load from file
-    instances['Load(kW)'] = instances['Load(kW)'].map(lambda entry: entry[1:-1].split())
-    instances['Load(kW)'] = instances['Load(kW)'].map(lambda entry: list(np.float_(entry)))
-    tot_cons = [instances['Load(kW)'][mr] for i in range(mrT)]
-    np.asarray(tot_cons)
+        #instances pv from file
+        instances['PV(kW)'] = instances['PV(kW)'].map(lambda entry: entry[1:-1].split())
+        instances['PV(kW)'] = instances['PV(kW)'].map(lambda entry: list(np.float_(entry)))
+        pRenPV = [instances['PV(kW)'][mr] for i in range(mrT)]
+        np.asarray(pRenPV)
+
+        #instances load from file
+        instances['Load(kW)'] = instances['Load(kW)'].map(lambda entry: entry[1:-1].split())
+        instances['Load(kW)'] = instances['Load(kW)'].map(lambda entry: list(np.float_(entry)))
+        tot_cons = [instances['Load(kW)'][mr] for i in range(mrT)]
+        np.asarray(tot_cons)
     
     shift = np.load('optShift.npy')
+
+    all_models = []
     
     #if you want to run more than one instance at a time mrT != 1
     for j in range(mrT):
@@ -142,8 +150,13 @@ def heur (mr,namefile, savepath=None):
             #for using storage constraints for mode change we have to add cRU*change in the objective function
         
             mod.setObjective(obf)
-            
-            solve(mod)
+
+            feasible = solve(mod)
+
+            if not feasible:
+                return None, None
+
+            all_models.append(mod)
 
             runList.append(mod.Runtime*60)
             runtime += mod.Runtime*60
@@ -170,23 +183,21 @@ def heur (mr,namefile, savepath=None):
 
         a10 = shift
         data = np.array([a1, a2, a3, a9, a6, a7, a4, a5, a8, a10])
-        for k in range(1, len(objList), 96):
+        for k in range(0, len(objList), 96):
             ob = sum(objList[k:k+96])
         objFinal.append(ob)
         
 
-        for k in range(1, len(runList), 96):
+        for k in range(0, len(runList), 96):
             run = sum(runList[k:k+96])
         runFinal.append(round(run,2))
 
-        print("\n============================== Solutions of Instance %d  =================================\n\n" %(mr))
+        # print("\n============================== Solutions of Instance %d  =================================\n\n" %(mr))
 
         objFinal = np.mean(objFinal)
         
-        print("The solution cost (in keuro) is: %s\n" %(str(np.mean(objFinal))))
-        print("The runtime (in sec) is: %s\n" %(str(np.mean(runFinal))))
-
-        # NOTE: this table can be useful to visualize the solution found
+        # print("The solution cost (in keuro) is: %s\n" %(str(np.mean(objFinal))))
+        # print("The runtime (in sec) is: %s\n" %(str(np.mean(runFinal))))
 
         timestamps = timestamps_headers(num_timeunits=96)
         table = list()
@@ -215,9 +226,19 @@ def heur (mr,namefile, savepath=None):
         storage_capacity.insert(0, 'cap')
         table.append(storage_capacity)
 
-        print(tabulate(table, headers=timestamps, tablefmt='pretty'))
+        # print(tabulate(table, headers=timestamps, tablefmt='pretty'))
 
         return objFinal, objList
+
+########################################################################################################################
+
+
+if __name__ == '__main__':
+    for idx in range(0, 1000):
+        cost, _ = heur(mr=idx, namefile='instancesPredictions.csv')
+        if cost < 0:
+            print(idx)
+            exit()
 
 
 
