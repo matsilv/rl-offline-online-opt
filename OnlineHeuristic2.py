@@ -1,3 +1,6 @@
+"""
+    This script contains the second version of the heuristic with the more complex storage constraints.
+"""
 
 from gurobipy import *
 import numpy as np
@@ -23,12 +26,7 @@ def solve(mod):
         exit(0)
 
 #greedy heuristic
-def heur (mr,namefile, savepath):
-
-    # NOTE: create the directory where the gurobi models are saved to
-    if savepath is not None:
-        if not os.path.exists(savepath):
-            os.makedirs(savepath)
+def heur (mr,namefile):
     
     #timestamp
     n = 96
@@ -86,9 +84,9 @@ def heur (mr,namefile, savepath):
             pGridIn[i] = mod.addVar(vtype=GRB.CONTINUOUS, name="pGrid_"+str(i))
             pGridOut[i] = mod.addVar(vtype=GRB.CONTINUOUS, name="pGrid_"+str(i))
             cap[i] = mod.addVar(vtype=GRB.CONTINUOUS, name="cap_"+str(i))
-            change[i] = mod.addVar(vtype=GRB.INTEGER, name="change")
-            phi[i] = mod.addVar(vtype=GRB.BINARY, name="phi")
-            notphi[i] = mod.addVar(vtype=GRB.BINARY, name="notphi")
+            # change[i] = mod.addVar(vtype=GRB.INTEGER, name="change")
+            # phi[i] = mod.addVar(vtype=GRB.BINARY, name="phi")
+            # notphi[i] = mod.addVar(vtype=GRB.BINARY, name="notphi")
 
         #################################################
         #Shift from Demand Side Energy Management System
@@ -101,9 +99,9 @@ def heur (mr,namefile, savepath):
         ####################
 
         #more sophisticated storage constraints
-            mod.addConstr(notphi[i]==1-phi[i])
-            mod.addGenConstrIndicator(phi[i], True, pStorageOut[i], GRB.LESS_EQUAL, 0)
-            mod.addGenConstrIndicator(notphi[i], True, pStorageIn[i], GRB.LESS_EQUAL, 0)
+            # mod.addConstr(notphi[i]==1-phi[i])
+            # mod.addGenConstrIndicator(phi[i], True, pStorageOut[i], GRB.LESS_EQUAL, 0)
+            # mod.addGenConstrIndicator(notphi[i], True, pStorageIn[i], GRB.LESS_EQUAL, 0)
 
         #power balance constraint
             mod.addConstr((pRenPV[j][i]+pStorageOut[i]+pGridOut[i]+pDiesel[i]-pStorageIn[i]-pGridIn[i] == tilde_cons[i]), "Power balance")
@@ -124,9 +122,9 @@ def heur (mr,namefile, savepath):
             mod.addConstr(pGridIn[i]<=600)
         
         #Storage mode change
-            mod.addConstr(change[i]>=0)
-            mod.addConstr(change[i]>= (phi[i] - phiX))
-            mod.addConstr(change[i]>= (phiX - phi[i]))
+            # mod.addConstr(change[i]>=0)
+            # mod.addConstr(change[i]>= (phi[i] - phiX))
+            # mod.addConstr(change[i]>= (phiX - phi[i]))
 
         #Objective function
             obf = (cGrid[i]*pGridOut[i]+cDiesel*pDiesel[i]+cGridSt[i]*pStorageIn[i]-cGrid[i]*pGridIn[i]+cGridS*change[i])
@@ -134,10 +132,6 @@ def heur (mr,namefile, savepath):
             mod.setObjective(obf)
 
             solve(mod)
-
-            # NOTE: save the gurobi models
-            if savepath is not None:
-                mod.write(os.path.join(savepath, f'model{i}.lp'))
 
             runList.append(mod.Runtime*60)
             runtime += mod.Runtime*60

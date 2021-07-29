@@ -1,3 +1,6 @@
+"""
+    This script contains the original version of the heuristic.
+"""
 
 from gurobipy import *
 import numpy as np
@@ -23,24 +26,40 @@ def timestamps_headers(num_timeunits):
 
     return timestamps
 
+
 # Optimize VPP planning Model
 def solve(mod):
+    """
+    Solve an optimization model.
+    :param mod: gurobipy.Model; the optimization model to be solved.
+    :return: bool; True if the optimal solution is found, False otherwise.
+    """
+
     mod.setParam('OutputFlag',0)
     mod.optimize()
     status = mod.status
     if status == GRB.Status.INF_OR_UNBD or status == GRB.Status.INFEASIBLE \
         or status == GRB.Status.UNBOUNDED:
-        # print('The model cannot be solved because it is infeasible or unbounded')
+        print('The model cannot be solved because it is infeasible or unbounded')
         return False
                       
     if status != GRB.Status.OPTIMAL:
-        # print('Optimization was stopped with status %d' % status)
+        print('Optimization was stopped with status %d' % status)
         return False
 
     return True
 
 #greedy heuristic
 def heur (mr=None, namefile=None, pRenPV=None, tot_cons=None):
+    """
+    Implementation of a simple heuristic.
+    :param mr: int; index of the instance to be solved.
+    :param namefile: string; the name of the file from which instances are loaded.
+    :param pRenPV: numpy.array of shape (n_instances, 96); photovoltaic production at each timestep.
+    :param tot_cons: numpy.array of shape (n_instances, 96); electricity demand at each timestep.
+    :return: float, list of float; final solution cost and list of costs for each timestep; None and None if the
+                                   instance can not be solved.
+    """
 
     assert (mr is not None and namefile is not None) or (pRenPV is not None and tot_cons is not None), \
         "You must specify either the filename from which instances are loaded or the instance itself"
@@ -97,11 +116,18 @@ def heur (mr=None, namefile=None, pRenPV=None, tot_cons=None):
             mod = Model()
 
         #build variables and define bounds
+            # pDiesel: electricity picked from the diesel power
             pDiesel[i] = mod.addVar(vtype=GRB.CONTINUOUS, name="pDiesel_"+str(i))
+            # GridOut (acquisto)
+            # pStorageIn: store electricity
             pStorageIn[i] = mod.addVar(vtype=GRB.CONTINUOUS, name="pStorageIn_"+str(i))
+            # pStorageOut: pick electricity from the storage and send it to the network
             pStorageOut[i] = mod.addVar(vtype=GRB.CONTINUOUS, name="pStorageOut_"+str(i))
+            # pGridIn: electricity to the network (selling)
             pGridIn[i] = mod.addVar(vtype=GRB.CONTINUOUS, name="pGridIn_"+str(i))
+            # pGridOut: buy electricity from the network
             pGridOut[i] = mod.addVar(vtype=GRB.CONTINUOUS, name="pGridOut_"+str(i))
+            # cap: storage capacitance
             cap[i] = mod.addVar(vtype=GRB.CONTINUOUS, name="cap_"+str(i))
             #change[i] = mod.addVar(vtype=GRB.INTEGER, name="change")
             #phi[i] = mod.addVar(vtype=GRB.BINARY, name="phi")
@@ -151,6 +177,8 @@ def heur (mr=None, namefile=None, pRenPV=None, tot_cons=None):
         
             mod.setObjective(obf)
 
+            mod.write('model.lp')
+
             feasible = solve(mod)
 
             if not feasible:
@@ -192,12 +220,12 @@ def heur (mr=None, namefile=None, pRenPV=None, tot_cons=None):
             run = sum(runList[k:k+96])
         runFinal.append(round(run,2))
 
-        # print("\n============================== Solutions of Instance %d  =================================\n\n" %(mr))
+        print("\n============================== Solutions of Instance %d  =================================\n\n" %(mr))
 
         objFinal = np.mean(objFinal)
         
-        # print("The solution cost (in keuro) is: %s\n" %(str(np.mean(objFinal))))
-        # print("The runtime (in sec) is: %s\n" %(str(np.mean(runFinal))))
+        print("The solution cost (in keuro) is: %s\n" %(str(np.mean(objFinal))))
+        print("The runtime (in sec) is: %s\n" %(str(np.mean(runFinal))))
 
         timestamps = timestamps_headers(num_timeunits=96)
         table = list()
@@ -226,19 +254,16 @@ def heur (mr=None, namefile=None, pRenPV=None, tot_cons=None):
         storage_capacity.insert(0, 'cap')
         table.append(storage_capacity)
 
-        # print(tabulate(table, headers=timestamps, tablefmt='pretty'))
+        all_costs = list(objX[0])
+        all_costs.insert(0, 'Cost')
+        table.append(all_costs)
+
+        print(tabulate(table, headers=timestamps, tablefmt='pretty'))
 
         return objFinal, objList
 
 ########################################################################################################################
 
-
-if __name__ == '__main__':
-    for idx in range(0, 1000):
-        cost, _ = heur(mr=idx, namefile='instancesPredictions.csv')
-        if cost < 0:
-            print(idx)
-            exit()
 
 
 

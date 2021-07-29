@@ -121,6 +121,7 @@ class VPPEnv(Env):
         self.tot_cons_pred = self.predictions['Load(kW)'][self.mr]
         self.tot_cons_pred = np.asarray(self.tot_cons_pred)
 
+        # Loop untill you find a realization which is feasible
         feasible = False
 
         while not feasible:
@@ -177,7 +178,7 @@ class VPPEnv(Env):
         :return: list of gurobipy.Model; a list with the solved optimization model.
         """
 
-        # NOTE: check variables initialization
+        # Check variables initialization
         assert self.mr is not None, "Instance index must be initialized"
         assert self.cGrid is not None, "cGrid must be initialized"
         assert self.shift is not None, "shifts must be initialized before the step function"
@@ -194,6 +195,7 @@ class VPPEnv(Env):
         # Save all the optimization models in a list
         models = []
 
+        # Loop for each timestep
         for i in range(self.n):
             # create a model
             mod = Model()
@@ -210,7 +212,7 @@ class VPPEnv(Env):
             # Shift from Demand Side Energy Management System
             #################################################
 
-            # NOTE: the heuristic uses the real load
+            # NOTE: the heuristic uses the real load and photovoltaic production
 
             tilde_cons[i] = (self.shift[i] + self.tot_cons_real[i])
 
@@ -264,14 +266,14 @@ class VPPEnv(Env):
 
         cost = 0
 
+        # Compute the total cost considering all the timesteps
         for timestep, model in enumerate(models):
             optimal_pGridOut = model.getVarByName('pGridOut_' + str(timestep)).X
             optimal_pDiesel = model.getVarByName('pDiesel_' + str(timestep)).X
-            optimal_pStorageIn = model.getVarByName('pStorageIn_' + str(timestep)).X
             optimal_pGridIn = model.getVarByName('pGridIn_' + str(timestep)).X
 
-            cost += (self.cGrid[timestep] * optimal_pGridOut + self.cDiesel * optimal_pDiesel +
-                     self.cGrid[timestep] * optimal_pStorageIn - self.cGrid[timestep] * optimal_pGridIn)
+            cost += (self.cGrid[timestep] * optimal_pGridOut + self.cDiesel * optimal_pDiesel
+                     - self.cGrid[timestep] * optimal_pGridIn)
 
         return cost
 
@@ -339,6 +341,7 @@ class VPPEnv(Env):
 ########################################################################################################################
 
 
+# FIXME: the reward function has to be fixed
 class MarkovianVPPEnv(Env):
     """
     Gym environment for the Markovian version of the VPP optimization model.

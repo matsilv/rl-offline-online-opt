@@ -5,6 +5,7 @@ import numpy as np
 from numpy.testing import assert_almost_equal
 import pandas as pd
 from garage.np.baselines import LinearFeatureBaseline
+from garage.tf.baselines import GaussianMLPBaseline
 from garage.sampler import LocalSampler
 from garage.tf.algos import VPG
 from garage.tf.policies import GaussianMLPPolicy
@@ -89,6 +90,7 @@ def check_env(num_episodes=1, gurobi_models_dir=None):
 ########################################################################################################################
 
 
+# FIXME: this function has to be fixed considering the new reward function
 def check_markovian_env():
     """
     Simple test function to check that the environment is working properly
@@ -138,7 +140,7 @@ def check_markovian_env():
 
 
 # NOTE: set the logdir
-@wrap_experiment(log_dir=os.path.join('gaussian-vpg', 'experiment-1'),
+@wrap_experiment(log_dir=os.path.join('models', 'gaussian-a2c', 'experiment-2'),
                  archive_launch_repo=False,
                  use_existing_dir=True)
 def train_rl_algo(ctxt=None, test_split=0.25, num_epochs=1000):
@@ -183,7 +185,7 @@ def train_rl_algo(ctxt=None, test_split=0.25, num_epochs=1000):
         policy = GaussianMLPPolicy(env.spec)
 
         # A linear value function (baseline) based on features
-        baseline = LinearFeatureBaseline(env_spec=env.spec)
+        baseline = GaussianMLPBaseline(env_spec=env.spec)
 
         # It's called the "Local" sampler because it runs everything in the same process and thread as where
         # it was called from.
@@ -201,34 +203,49 @@ def train_rl_algo(ctxt=None, test_split=0.25, num_epochs=1000):
                    optimizer_args=dict(learning_rate=0.01, ))
 
         trainer.setup(algo, env)
-        trainer.train(n_epochs=num_epochs, batch_size=100, plot=False)
+        trainer.train(n_epochs=num_epochs, batch_size=200, plot=False)
+
+        episode_length = 0
+        total_reward = 0
+        timestamps = timestamps_headers(env.n)
+
+        for episode in range(100):
+            last_obs, _ = env.reset()
+
+            # Perform an episode
+            while episode_length < np.inf:
+                env.render(mode='ascii')
+
+                a, agent_info = algo.policy.get_action(last_obs)
+                a = agent_info['mean']
+                print('\nAction')
+                print(tabulate(np.expand_dims(a, axis=0), headers=timestamps, tablefmt='pretty'))
+
+                obs, reward, done, info = env.step(a)
+
+                total_reward += reward
+
+                print(f'\nCost: {-reward}')
+
+                episode_length += 1
+
+                if done:
+                    break
+                last_obs = obs
+
+        print(total_reward / 100)
 
 
 ########################################################################################################################
 
 
-def test_rl_algo(log_dir, test_split=0.25):
+def test_rl_algo(log_dir, num_episodes=100):
     """
     Test a trained agent.
     :param log_dir: string; path where training information are saved to.
-    :param test_split: float or list of int; fraction or indexes of the instances to be used for test.
+    :param num_episodes: int; number of episodes.
     :return:
     """
-
-    # Load data from file
-    predictions = pd.read_csv('instancesPredictions.csv')
-    shift = np.load('optShift.npy')
-    cGrid = np.load('gmePrices.npy')
-
-    # Split between training and test
-    if isinstance(test_split, float):
-        split_index = int(len(predictions) * (1 - test_split))
-        train_predictions = predictions[:split_index]
-    elif isinstance(test_split, list):
-        split_index = test_split
-        train_predictions = predictions.iloc[split_index]
-    else:
-        raise Exception("test_split must be list of int or float")
 
     # Create TF1 session and load all the experiments data
     tf.compat.v1.disable_eager_execution()
@@ -238,38 +255,39 @@ def test_rl_algo(log_dir, test_split=0.25):
         # Get the agent
         algo = data['algo']
         # Create an environment without noise
-        env = VPPEnv(predictions=train_predictions,
-                     shift=shift,
-                     cGrid=cGrid,
-                     noise_std_dev=0,
-                     savepath=None)
-        last_obs = env.reset()
+        env = data['env']
 
         policy = algo.policy
         policy.reset()
 
-        episode_length = 0
-
         timestamps = timestamps_headers(env.n)
 
-        # Perform an episode
-        while episode_length < np.inf:
-            env.render(mode='ascii')
+        total_reward = 0
+        for episode in range(num_episodes):
+            last_obs, _ = env.reset()
+            done = False
 
-            a, agent_info = policy.get_action(last_obs)
-            a = agent_info['mean']
-            print('\nAction')
-            print(tabulate(np.expand_dims(a, axis=0), headers=timestamps, tablefmt='pretty'))
+            # Perform an episode
+            while not done:
+                env.render(mode='ascii')
 
-            obs, reward, done, info = env.step(a)
+                a, agent_info = policy.get_action(last_obs)
+                a = agent_info['mean']
+                print('\nAction')
+                print(tabulate(np.expand_dims(a, axis=0), headers=timestamps, tablefmt='pretty'))
 
-            print(f'\nCost: {-reward}')
+                step = env.step(a)
 
-            episode_length += 1
+                total_reward += step.reward
 
-            if done:
-                break
-            last_obs = obs
+                print(f'\nCost: {-step.reward}')
+
+                if step.terminal or step.timeout:
+                    break
+                last_obs = step.obs
+
+        print(f'\nMean reward: {total_reward / num_episodes}')
+
 
 
 ########################################################################################################################
@@ -292,7 +310,7 @@ def resume_experiment(ctxt, saved_dir):
 
 
 if __name__ == '__main__':
-    check_env(num_episodes=200, gurobi_models_dir='gurobi-models')
-    #train_rl_algo(test_split=[0], num_epochs=25)
+    # check_env(num_episodes=200, gurobi_models_dir='gurobi-models')
+    # train_rl_algo(test_split=[0], num_epochs=2)
     # check_markovian_env()
-    #test_rl_algo(log_dir=os.path.join('gaussian-vpg', 'experiment-1'))
+    test_rl_algo(log_dir=os.path.join('models', 'gaussian-a2c', 'experiment-1'))
