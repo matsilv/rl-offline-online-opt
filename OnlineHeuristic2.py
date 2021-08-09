@@ -32,7 +32,7 @@ def heur (mr,namefile):
     n = 96
     
     #price data from GME
-    cGrid = np.load('gmePrices.npy')
+    cGrid = np.load('data/gmePrices.npy')
     cGridS = np.mean(cGrid)
     cGridSt=cGrid
     
@@ -68,7 +68,7 @@ def heur (mr,namefile):
     tot_cons = [instances['Load(kW)'][mr] for i in range(mrT)]
     np.asarray(tot_cons)
     
-    shift = np.load('optShift.npy')
+    shift = np.load('data/optShift.npy')
     
     #if you want to run more than one instance at a time mrT != 1
     for j in range(mrT):

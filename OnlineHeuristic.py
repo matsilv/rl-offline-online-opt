@@ -27,6 +27,9 @@ def timestamps_headers(num_timeunits):
     return timestamps
 
 
+########################################################################################################################
+
+
 # Optimize VPP planning Model
 def solve(mod):
     """
@@ -35,12 +38,17 @@ def solve(mod):
     :return: bool; True if the optimal solution is found, False otherwise.
     """
 
-    mod.setParam('OutputFlag',0)
+    mod.setParam('OutputFlag', 0)
     mod.optimize()
     status = mod.status
-    if status == GRB.Status.INF_OR_UNBD or status == GRB.Status.INFEASIBLE \
-        or status == GRB.Status.UNBOUNDED:
-        print('The model cannot be solved because it is infeasible or unbounded')
+    if status == GRB.Status.UNBOUNDED:
+        print('The model is unbounded')
+        return False
+    elif status == GRB.Status.INFEASIBLE:
+        print('The model is infeasible')
+        return False
+    elif status == GRB.Status.INF_OR_UNBD:
+        print('The model is either infeasible or unbounded')
         return False
                       
     if status != GRB.Status.OPTIMAL:
@@ -49,76 +57,90 @@ def solve(mod):
 
     return True
 
-#greedy heuristic
-def heur (mr=None, namefile=None, pRenPV=None, tot_cons=None):
+########################################################################################################################
+
+
+# greedy heuristic
+def heur(mr=None,
+         instances_filename=None,
+         pRenPV=None,
+         tot_cons=None,
+         display=False,
+         virtual_costs_filename=None):
     """
-    Implementation of a simple heuristic.
+    Implementation of a simple heuristic. You can load the instances from file and specify the index of the one you
+    want to solve or give the instance itself as input.
     :param mr: int; index of the instance to be solved.
-    :param namefile: string; the name of the file from which instances are loaded.
+    :param instances_filename: string; the name of the file from which instances are loaded.
     :param pRenPV: numpy.array of shape (n_instances, 96); photovoltaic production at each timestep.
     :param tot_cons: numpy.array of shape (n_instances, 96); electricity demand at each timestep.
-    :return: float, list of float; final solution cost and list of costs for each timestep; None and None if the
-                                   instance can not be solved.
+    :param display: bool; if True, the solutions is printed to the output.
+    :param virtual_costs_filename: string; the name of the file from which the virtual costs are loaded.
+    :return: float, list of float, float; final solution cost, list of costs for each timestep and real cost;
+                                          None, None and None if the instance can not be solved.
     """
 
-    assert (mr is not None and namefile is not None) or (pRenPV is not None and tot_cons is not None), \
-        "You must specify either the filename from which instances are loaded or the instance itself"
+    assert (mr is not None and instances_filename is not None) or (pRenPV is not None and tot_cons is not None), \
+        "You must specify either the filename from which instances are loaded and the instance index " + \
+        "or the instance itself"
     
-    #timestamp
+    # timestamp
     n = 96
     
     #price data from GME
-    cGrid = np.load('gmePrices.npy')
+    cGrid = np.load('data/gmePrices.npy')
     cGridS = np.mean(cGrid)
-    
-    #capacities, bounds, parameters and prices
+
+    if virtual_costs_filename is None:
+        c_virt = cGrid
+    else:
+        c_virt = np.load('data/optParPred0.npy')
+
+    # capacities, bounds, parameters and prices
     listc = []
     mrT = 1
-    objX = np.zeros((mrT,n))
-    objTot= [None]*mrT
+    objX = np.zeros((mrT, n))
     objList, runList, objFinal, runFinal = [[] for i in range(4)]
     a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, cap, change, phi, notphi, pDiesel, pStorageIn, pStorageOut, pGridIn, pGridOut, tilde_cons  = [[None]*n for i in range(20)]
     capMax = 1000
     inCap = 800
     capX = inCap
     cDiesel = 0.054
-    cRU = 0.35
     pDieselMax = 1200
     runtime = 0
-    phiX = 0
-    solutions = np.zeros((mrT,n,9))
+    solutions = np.zeros((mrT, n, 9))
 
-    if namefile is not None:
-        #read instances
-        instances = pd.read_csv(namefile)
+    if instances_filename is not None:
+        # read instances
+        instances = pd.read_csv(instances_filename)
 
-        #instances pv from file
+        # instances pv from file
         instances['PV(kW)'] = instances['PV(kW)'].map(lambda entry: entry[1:-1].split())
         instances['PV(kW)'] = instances['PV(kW)'].map(lambda entry: list(np.float_(entry)))
         pRenPV = [instances['PV(kW)'][mr] for i in range(mrT)]
         np.asarray(pRenPV)
 
-        #instances load from file
+        # instances load from file
         instances['Load(kW)'] = instances['Load(kW)'].map(lambda entry: entry[1:-1].split())
         instances['Load(kW)'] = instances['Load(kW)'].map(lambda entry: list(np.float_(entry)))
         tot_cons = [instances['Load(kW)'][mr] for i in range(mrT)]
         np.asarray(tot_cons)
     
-    shift = np.load('optShift.npy')
+    shift = np.load('data/optShift.npy')
 
     all_models = []
     
-    #if you want to run more than one instance at a time mrT != 1
+    # if you want to run more than one instance at a time mrT != 1
     for j in range(mrT):
+
         for i in range(n):
 
-        #create a model
+        # create a model
             mod = Model()
 
-        #build variables and define bounds
+        # build variables and define bounds
             # pDiesel: electricity picked from the diesel power
             pDiesel[i] = mod.addVar(vtype=GRB.CONTINUOUS, name="pDiesel_"+str(i))
-            # GridOut (acquisto)
             # pStorageIn: store electricity
             pStorageIn[i] = mod.addVar(vtype=GRB.CONTINUOUS, name="pStorageIn_"+str(i))
             # pStorageOut: pick electricity from the storage and send it to the network
@@ -129,70 +151,71 @@ def heur (mr=None, namefile=None, pRenPV=None, tot_cons=None):
             pGridOut[i] = mod.addVar(vtype=GRB.CONTINUOUS, name="pGridOut_"+str(i))
             # cap: storage capacitance
             cap[i] = mod.addVar(vtype=GRB.CONTINUOUS, name="cap_"+str(i))
-            #change[i] = mod.addVar(vtype=GRB.INTEGER, name="change")
-            #phi[i] = mod.addVar(vtype=GRB.BINARY, name="phi")
-            #notphi[i] = mod.addVar(vtype=GRB.BINARY, name="notphi")
+
+            # change[i] = mod.addVar(vtype=GRB.INTEGER, name="change")
+            # phi[i] = mod.addVar(vtype=GRB.BINARY, name="phi")
+            # notphi[i] = mod.addVar(vtype=GRB.BINARY, name="notphi")
 
         #################################################
-        #Shift from Demand Side Energy Management System
+        # Shift from Demand Side Energy Management System
         #################################################
 
             tilde_cons[i] = (shift[i]+tot_cons[j][i])
 
         ####################
-        #Model constraints
+        # Model constraints
         ####################
 
-        #more sophisticated storage constraints
-            #mod.addConstr(notphi[i]==1-phi[i])
-            #mod.addGenConstrIndicator(phi[i], True, pStorageOut[i], GRB.LESS_EQUAL, 0)
-            #mod.addGenConstrIndicator(notphi[i], True, pStorageIn[i], GRB.LESS_EQUAL, 0)
+        # more sophisticated storage constraints
+            # mod.addConstr(notphi[i]==1-phi[i])
+            # mod.addGenConstrIndicator(phi[i], True, pStorageOut[i], GRB.LESS_EQUAL, 0)
+            # mod.addGenConstrIndicator(notphi[i], True, pStorageIn[i], GRB.LESS_EQUAL, 0)
 
-        #power balance constraint
-            mod.addConstr((pRenPV[j][i]+pStorageOut[i]+pGridOut[i]+pDiesel[i]-pStorageIn[i]-pGridIn[i] == tilde_cons[i]), "Power balance")
+        # power balance constraint
+            mod.addConstr((pRenPV[j][i] + pStorageOut[i] + pGridOut[i] + pDiesel[i] - pStorageIn[i] - pGridIn[i] ==
+                           tilde_cons[i]),
+                          "Power_balance")
 
-        #Storage cap
-            mod.addConstr(cap[i]==capX+pStorageIn[i]-pStorageOut[i])
-            mod.addConstr(cap[i]<=capMax)
+            # Storage cap
+            mod.addConstr(cap[i] == capX+pStorageIn[i]-pStorageOut[i])
+            mod.addConstr(cap[i] <= capMax)
 
-            mod.addConstr(pStorageIn[i]<=capMax-(capX))
-            mod.addConstr(pStorageOut[i]<=capX)
+            mod.addConstr(pStorageIn[i] <= capMax-capX)
+            mod.addConstr(pStorageOut[i] <= capX)
 
-            mod.addConstr(pStorageIn[i]<=200)
-            mod.addConstr(pStorageOut[i]<=200)
+            mod.addConstr(pStorageIn[i] <= 200)
+            mod.addConstr(pStorageOut[i] <= 200)
 
-
-        #Diesel and Net cap
-            mod.addConstr(pDiesel[i]<=pDieselMax)
-            mod.addConstr(pGridIn[i]<=600)
+            # Diesel and Net cap
+            mod.addConstr(pDiesel[i] <= pDieselMax)
+            mod.addConstr(pGridIn[i] <= 600)
         
-        #Storage mode change
-            #mod.addConstr(change[i]>=0)
-            #mod.addConstr(change[i]>= (phi[i] - phiX))
-            #mod.addConstr(change[i]>= (phiX - phi[i]))
+            # Storage mode change
+            # mod.addConstr(change[i]>=0)
+            # mod.addConstr(change[i]>= (phi[i] - phiX))
+            # mod.addConstr(change[i]>= (phiX - phi[i]))
 
-        #Objective function
-            obf = (cGrid[i]*pGridOut[i]+cDiesel*pDiesel[i]+cGrid[i]*pStorageIn[i]-cGrid[i]*pGridIn[i])
-            #for using storage constraints for mode change we have to add cRU*change in the objective function
+            # Objective function
+            obf = (cGrid[i]*pGridOut[i]+cDiesel*pDiesel[i]+c_virt[i]*pStorageIn[i]-cGrid[i]*pGridIn[i])
+            # for using storage constraints for mode change we have to add cRU*change in the objective function
         
             mod.setObjective(obf)
-
-            mod.write('model.lp')
 
             feasible = solve(mod)
 
             if not feasible:
-                return None, None
+                return None, None, None
 
+            # Save all the optimized models in a list
             all_models.append(mod)
 
             runList.append(mod.Runtime*60)
             runtime += mod.Runtime*60
 
-            #extract x values
+            # extract x values
             a2[i] = pDiesel[i].X
-            a4[i]  = pStorageIn[i].X
-            a5[i]  = pStorageOut[i].X
+            a4[i] = pStorageIn[i].X
+            a5[i] = pStorageOut[i].X
             a3[i] = pRenPV[j][i]
             a6[i] = pGridIn[i].X
             a7[i] = pGridOut[i].X
@@ -208,59 +231,71 @@ def heur (mr=None, namefile=None, pRenPV=None, tot_cons=None):
         
             objList.append((objX[j][i]))
 
-
         a10 = shift
-        data = np.array([a1, a2, a3, a9, a6, a7, a4, a5, a8, a10])
         for k in range(0, len(objList), 96):
             ob = sum(objList[k:k+96])
         objFinal.append(ob)
-        
 
         for k in range(0, len(runList), 96):
             run = sum(runList[k:k+96])
         runFinal.append(round(run,2))
 
-        print("\n============================== Solutions of Instance %d  =================================\n\n" %(mr))
+        real_cost = 0
+        all_real_costs = []
 
-        objFinal = np.mean(objFinal)
-        
-        print("The solution cost (in keuro) is: %s\n" %(str(np.mean(objFinal))))
-        print("The runtime (in sec) is: %s\n" %(str(np.mean(runFinal))))
+        # Compute the total cost considering all the timesteps
+        for timestep, model in enumerate(all_models):
+            optimal_pGridOut = model.getVarByName('pGridOut_' + str(timestep)).X
+            optimal_pDiesel = model.getVarByName('pDiesel_' + str(timestep)).X
+            optimal_pGridIn = model.getVarByName('pGridIn_' + str(timestep)).X
 
-        timestamps = timestamps_headers(num_timeunits=96)
-        table = list()
+            cost = (cGrid[timestep] * optimal_pGridOut + cDiesel * optimal_pDiesel -
+                          cGrid[timestep] * optimal_pGridIn)
+            all_real_costs.append(cost)
+            real_cost += cost
 
-        diesel_power_consumptions = a2.copy()
-        diesel_power_consumptions.insert(0, 'pDiesel')
-        table.append(diesel_power_consumptions)
+        if display:
+            print("\n============================== Solutions of Instance %d  =================================\n\n" %(mr))
 
-        storage_consumptions = a4.copy()
-        storage_consumptions.insert(0, 'pStorageIn')
-        table.append(storage_consumptions)
+            objFinal = np.mean(objFinal)
 
-        storage_charging = a5.copy()
-        storage_charging.insert(0, 'pStorageOut')
-        table.append(storage_charging)
+            print("The solution cost (in keuro) is: %s\n" %(str(np.mean(objFinal))))
+            print("The runtime (in sec) is: %s\n" %(str(np.mean(runFinal))))
 
-        energy_sold = a6.copy()
-        energy_sold.insert(0, 'pGridIn')
-        table.append(energy_sold)
+            timestamps = timestamps_headers(num_timeunits=96)
+            table = list()
 
-        energy_bought = a7.copy()
-        energy_bought.insert(0, 'pGridOut')
-        table.append(energy_bought)
+            diesel_power_consumptions = a2.copy()
+            diesel_power_consumptions.insert(0, 'pDiesel')
+            table.append(diesel_power_consumptions)
 
-        storage_capacity = a8.copy()
-        storage_capacity.insert(0, 'cap')
-        table.append(storage_capacity)
+            storage_consumptions = a4.copy()
+            storage_consumptions.insert(0, 'pStorageIn')
+            table.append(storage_consumptions)
 
-        all_costs = list(objX[0])
-        all_costs.insert(0, 'Cost')
-        table.append(all_costs)
+            storage_charging = a5.copy()
+            storage_charging.insert(0, 'pStorageOut')
+            table.append(storage_charging)
 
-        print(tabulate(table, headers=timestamps, tablefmt='pretty'))
+            energy_sold = a6.copy()
+            energy_sold.insert(0, 'pGridIn')
+            table.append(energy_sold)
 
-        return objFinal, objList
+            energy_bought = a7.copy()
+            energy_bought.insert(0, 'pGridOut')
+            table.append(energy_bought)
+
+            storage_capacity = a8.copy()
+            storage_capacity.insert(0, 'cap')
+            table.append(storage_capacity)
+
+            all_costs = list(objX[0])
+            all_costs.insert(0, 'Cost')
+            table.append(all_costs)
+
+            print(tabulate(table, headers=timestamps, tablefmt='pretty'))
+
+        return objFinal, objList, real_cost, all_real_costs
 
 ########################################################################################################################
 
