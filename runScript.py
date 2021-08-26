@@ -18,4 +18,4 @@ if __name__ == '__main__':
     nome_script, fileName, mr= sys.argv
 
     mr = int(mr)
-    cost, _ = onHeur.heur(mr,fileName)
+    cost, _, _, _ = onHeur.heur(mr,fileName)

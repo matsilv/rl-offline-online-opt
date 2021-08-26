@@ -8,6 +8,8 @@ from tabulate import tabulate
 from datetime import datetime, timedelta
 import pandas as pd
 import matplotlib.pyplot as plt
+from matplotlib.ticker import FormatStrFormatter
+import seaborn as sns
 
 ########################################################################################################################
 
@@ -56,6 +58,41 @@ def instances_preprocessing(instances):
 
 ########################################################################################################################
 
+
+def compare_cost(filepath1,
+                 filepath2,
+                 name1,
+                 name2,
+                 baseline=None):
+
+    sns.set_style('darkgrid')
+
+    rew1 = pd.read_csv(filepath1)['Extras/EpisodeRewardMean']
+    rew2 = pd.read_csv(filepath2)['Extras/EpisodeRewardMean']
+    rew1 = -rew1
+    rew1[rew1 > 500] = np.nan
+
+    rew2 = -rew2
+    rew2[rew2 > 500] = np.nan
+
+    plt.gca().yaxis.set_major_formatter(FormatStrFormatter('%d (k€)'))
+    plt.title('Average episode reward', fontweight='bold')
+    plt.xlabel('Epoch')
+
+    rew1.name = name1
+    rew2.name = name2
+
+    rew1.plot()
+    rew2.plot()
+
+    if baseline is not None:
+        plt.axhline(y=baseline, color='r', linestyle='--', label='Baseline mean cost')
+
+    plt.legend()
+    plt.show()
+
+
+########################################################################################################################
 
 class VPPEnv(Env):
     """
@@ -139,7 +176,7 @@ class VPPEnv(Env):
             noise = np.random.normal(0, self.noise_std_dev, self.n)
             self.tot_cons_real = self.tot_cons_pred + self.tot_cons_pred * noise
 
-            _, feasible = self._solve(c_virt=self.cGrid)
+            _, feasible = self._solve(c_virt=np.zeros_like(self.cGrid))
 
             if not feasible:
                 print('Found unfeasible realizations')
@@ -276,46 +313,17 @@ class VPPEnv(Env):
         assert len(models) == self.n
 
         cost = 0
-
-        grid_out = []
-        grid_in = []
-        diesel = []
-        storage_in = []
-        storage_out = []
-        cap = []
         all_cost = []
 
         # Compute the total cost considering all the timesteps
         for timestep, model in enumerate(models):
             optimal_pGridOut = model.getVarByName('pGridOut_' + str(timestep)).X
-            grid_out.append(optimal_pGridOut)
             optimal_pDiesel = model.getVarByName('pDiesel_' + str(timestep)).X
-            diesel.append(optimal_pDiesel)
             optimal_pGridIn = model.getVarByName('pGridIn_' + str(timestep)).X
-            grid_in.append(optimal_pGridIn)
-            optimal_pStorageIn = model.getVarByName('pStorageIn_' + str(timestep)).X
-            storage_in.append(optimal_pStorageIn)
-            optimal_pStorageOut = model.getVarByName('pStorageOut_' + str(timestep)).X
-            storage_out.append(optimal_pStorageOut)
-            optimal_cap = model.getVarByName('cap_' + str(timestep)).X
-            cap.append(optimal_cap)
 
             cost += (self.cGrid[timestep] * optimal_pGridOut + self.cDiesel * optimal_pDiesel
                      - self.cGrid[timestep] * optimal_pGridIn)
             all_cost.append(cost)
-
-        '''df = pd.DataFrame()
-        df['Grid in'] = grid_in
-        df['Grid out'] = grid_out
-        df['Diesel'] = diesel
-        df['Storage'] = cap
-        df['Production'] = self.pRenPVreal
-        df['Consumption'] = self.tot_cons_real
-        df['Cumulative cost'] = all_cost
-
-        df.plot(subplots=True)
-        plt.xlabel('Timestep (15 min)')
-        plt.show()'''
 
         return cost
 
@@ -332,7 +340,7 @@ class VPPEnv(Env):
         models, feasible = self._solve(action)
 
         if not feasible:
-            reward = -MIN_REWARD
+            reward = MIN_REWARD
             print('Unfeasible action performed by the agent')
         else:
             # The reward is the negative real cost
@@ -479,13 +487,13 @@ class MarkovianVPPEnv(Env):
             feasible = True
 
             while not done:
-                observations, reward, done, _ = self.step(action=0)
+                observations, reward, done, _ = self.step(action=0, agent_step=False)
                 if reward == MIN_REWARD:
                     feasible = False
                     break
 
             if not feasible:
-                print('Found unfeasible realizations')
+                print('Found infeasible realizations\n')
 
         # Reset time-dependent variables
         self.storage = self.inCap
@@ -623,7 +631,7 @@ class MarkovianVPPEnv(Env):
 
         return cost
 
-    def step(self, action):
+    def step(self, action, agent_step=True):
         """
         This is a step performed in the environment: the virtual costs are set by the agent and then the total cost
         (the reward) is computed.
@@ -636,8 +644,9 @@ class MarkovianVPPEnv(Env):
         models, feasible = self._solve(action)
 
         if not feasible:
-            reward = -MIN_REWARD
-            print('Unfeasible action performed by the agent')
+            reward = MIN_REWARD
+            if agent_step:
+                print('Performed infeasible action\n')
         else:
             # The reward is the negative real cost
             reward = -self._compute_real_cost(models)

@@ -9,6 +9,7 @@ import random
 import sys
 from tabulate import tabulate
 from datetime import datetime, timedelta
+import matplotlib.pyplot as plt
 
 
 def timestamps_headers(num_timeunits):
@@ -42,17 +43,17 @@ def solve(mod):
     mod.optimize()
     status = mod.status
     if status == GRB.Status.UNBOUNDED:
-        print('The model is unbounded')
+        print('\nThe model is unbounded')
         return False
     elif status == GRB.Status.INFEASIBLE:
-        print('The model is infeasible')
+        print('\nThe model is infeasible')
         return False
     elif status == GRB.Status.INF_OR_UNBD:
-        print('The model is either infeasible or unbounded')
+        print('\nThe model is either infeasible or unbounded')
         return False
                       
     if status != GRB.Status.OPTIMAL:
-        print('Optimization was stopped with status %d' % status)
+        print('\nOptimization was stopped with status %d' % status)
         return False
 
     return True
@@ -66,7 +67,7 @@ def heur(mr=None,
          pRenPV=None,
          tot_cons=None,
          display=False,
-         virtual_costs_filename=None):
+         virtual_costs=None):
     """
     Implementation of a simple heuristic. You can load the instances from file and specify the index of the one you
     want to solve or give the instance itself as input.
@@ -84,19 +85,20 @@ def heur(mr=None,
         "You must specify either the filename from which instances are loaded and the instance index " + \
         "or the instance itself"
     
-    # timestamp
+    # Number of timestamp
     n = 96
     
-    #price data from GME
+    # Price data from GME
     cGrid = np.load('data/gmePrices.npy')
     cGridS = np.mean(cGrid)
 
-    if virtual_costs_filename is None:
-        c_virt = cGrid
+    #Set the virtual costs
+    if virtual_costs is None:
+        c_virt = cGrid.copy()
     else:
-        c_virt = np.load('data/optParPred0.npy')
+        c_virt = virtual_costs.copy()
 
-    # capacities, bounds, parameters and prices
+    # Capacities, bounds, parameters and prices
     listc = []
     mrT = 1
     objX = np.zeros((mrT, n))
@@ -110,6 +112,7 @@ def heur(mr=None,
     runtime = 0
     solutions = np.zeros((mrT, n, 9))
 
+    # Optionally, load instances from file
     if instances_filename is not None:
         # read instances
         instances = pd.read_csv(instances_filename)
@@ -125,20 +128,23 @@ def heur(mr=None,
         instances['Load(kW)'] = instances['Load(kW)'].map(lambda entry: list(np.float_(entry)))
         tot_cons = [instances['Load(kW)'][mr] for i in range(mrT)]
         np.asarray(tot_cons)
-    
+
+    # Load demand shifts
     shift = np.load('data/optShift.npy')
 
+    # Save all models in a list
     all_models = []
     
-    # if you want to run more than one instance at a time mrT != 1
+    # If you want to run more than one instance at a time mrT != 1
+    # FIXME: not supported now
     for j in range(mrT):
 
         for i in range(n):
 
-        # create a model
+            # Create a model
             mod = Model()
 
-        # build variables and define bounds
+            # Build variables and define bounds
             # pDiesel: electricity picked from the diesel power
             pDiesel[i] = mod.addVar(vtype=GRB.CONTINUOUS, name="pDiesel_"+str(i))
             # pStorageIn: store electricity
@@ -166,12 +172,12 @@ def heur(mr=None,
         # Model constraints
         ####################
 
-        # more sophisticated storage constraints
+        # More sophisticated storage constraints
             # mod.addConstr(notphi[i]==1-phi[i])
             # mod.addGenConstrIndicator(phi[i], True, pStorageOut[i], GRB.LESS_EQUAL, 0)
             # mod.addGenConstrIndicator(notphi[i], True, pStorageIn[i], GRB.LESS_EQUAL, 0)
 
-        # power balance constraint
+        # Power balance constraint
             mod.addConstr((pRenPV[j][i] + pStorageOut[i] + pGridOut[i] + pDiesel[i] - pStorageIn[i] - pGridIn[i] ==
                            tilde_cons[i]),
                           "Power_balance")
@@ -203,8 +209,13 @@ def heur(mr=None,
 
             feasible = solve(mod)
 
+            # If at least one timestep is not feasible then return
             if not feasible:
-                return None, None, None
+                return {'feasible': False,
+                        'real cost': None,
+                        'all real costs': None,
+                        'virtual cost': None,
+                        'all virtual costs': None}
 
             # Save all the optimized models in a list
             all_models.append(mod)
@@ -212,7 +223,7 @@ def heur(mr=None,
             runList.append(mod.Runtime*60)
             runtime += mod.Runtime*60
 
-            # extract x values
+            # Extract solution values
             a2[i] = pDiesel[i].X
             a4[i] = pStorageIn[i].X
             a5[i] = pStorageOut[i].X
@@ -232,30 +243,54 @@ def heur(mr=None,
             objList.append((objX[j][i]))
 
         a10 = shift
+
+        # Compute the solution cost
         for k in range(0, len(objList), 96):
             ob = sum(objList[k:k+96])
         objFinal.append(ob)
 
+        # Compute the runtime
         for k in range(0, len(runList), 96):
             run = sum(runList[k:k+96])
         runFinal.append(round(run,2))
 
         real_cost = 0
+        diesel_power_consumptions = []
+        storage_consumptions = []
+        storage_charging = []
+        energy_sold = []
+        energy_bought = []
+        storage_capacity = []
         all_real_costs = []
 
-        # Compute the total cost considering all the timesteps
+        # Compute the real cost
         for timestep, model in enumerate(all_models):
             optimal_pGridOut = model.getVarByName('pGridOut_' + str(timestep)).X
+            energy_bought.append(optimal_pGridOut)
+
             optimal_pDiesel = model.getVarByName('pDiesel_' + str(timestep)).X
+            diesel_power_consumptions.append(optimal_pDiesel)
+
             optimal_pGridIn = model.getVarByName('pGridIn_' + str(timestep)).X
+            energy_sold.append(optimal_pGridIn)
+
+            optimal_pStorageIn = model.getVarByName('pStorageIn_' + str(timestep)).X
+            storage_consumptions.append(optimal_pStorageIn)
+
+            optimal_pStorageOut = model.getVarByName('pStorageOut_' + str(timestep)).X
+            storage_charging.append(optimal_pStorageOut)
+
+            optimal_cap = model.getVarByName('cap_' + str(timestep)).X
+            storage_capacity.append(optimal_cap)
 
             cost = (cGrid[timestep] * optimal_pGridOut + cDiesel * optimal_pDiesel -
                           cGrid[timestep] * optimal_pGridIn)
             all_real_costs.append(cost)
             real_cost += cost
 
+        # Optionally, display the solution
         if display:
-            print("\n============================== Solutions of Instance %d  =================================\n\n" %(mr))
+            print("\n============================== Solutions  =================================\n\n")
 
             objFinal = np.mean(objFinal)
 
@@ -265,37 +300,41 @@ def heur(mr=None,
             timestamps = timestamps_headers(num_timeunits=96)
             table = list()
 
-            diesel_power_consumptions = a2.copy()
+            visualization_df = pd.DataFrame()
+
+            visualization_df['pDiesel'] = diesel_power_consumptions.copy()
             diesel_power_consumptions.insert(0, 'pDiesel')
             table.append(diesel_power_consumptions)
 
-            storage_consumptions = a4.copy()
+            visualization_df['pStorageIn'] = storage_consumptions.copy()
             storage_consumptions.insert(0, 'pStorageIn')
             table.append(storage_consumptions)
 
-            storage_charging = a5.copy()
+            visualization_df['pStorageOut'] = storage_charging
             storage_charging.insert(0, 'pStorageOut')
             table.append(storage_charging)
 
-            energy_sold = a6.copy()
+            visualization_df['pGridIn'] = energy_sold
             energy_sold.insert(0, 'pGridIn')
             table.append(energy_sold)
 
-            energy_bought = a7.copy()
+            visualization_df['pGridOut'] = energy_bought
             energy_bought.insert(0, 'pGridOut')
             table.append(energy_bought)
 
-            storage_capacity = a8.copy()
+            visualization_df['cap'] = storage_capacity
             storage_capacity.insert(0, 'cap')
             table.append(storage_capacity)
 
-            all_costs = list(objX[0])
-            all_costs.insert(0, 'Cost')
-            table.append(all_costs)
-
             print(tabulate(table, headers=timestamps, tablefmt='pretty'))
+            visualization_df.plot(subplots=True)
+            plt.show()
 
-        return objFinal, objList, real_cost, all_real_costs
+        return {'feasible': True,
+                'real cost': real_cost,
+                'all real costs': all_real_costs,
+                'virtual cost': objFinal,
+                'all virtual costs': objList}
 
 ########################################################################################################################
 

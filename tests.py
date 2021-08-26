@@ -19,6 +19,11 @@ import random
 ########################################################################################################################
 
 
+TIMESTEP_IN_A_DAY = 96
+
+########################################################################################################################
+
+
 def check_env(num_episodes=1, gurobi_models_dir=None, instances_indexes=[0]):
     """
     Simple test function to check that the environment is working properly.
@@ -67,9 +72,10 @@ def check_env(num_episodes=1, gurobi_models_dir=None, instances_indexes=[0]):
 
             done = step.terminal
 
-        _, _, real_cost, _ = OnlineHeuristic.heur(pRenPV=np.expand_dims(env.pRenPVreal, axis=0),
-                                                  tot_cons=np.expand_dims(env.tot_cons_real, axis=0),
-                                                  display=False)
+        results = OnlineHeuristic.heur(pRenPV=np.expand_dims(env.pRenPVreal, axis=0),
+                                       tot_cons=np.expand_dims(env.tot_cons_real, axis=0),
+                                       display=False)
+        real_cost = results['real cost']
 
         assert_almost_equal(-step.reward,
                             real_cost,
@@ -84,14 +90,20 @@ def check_env(num_episodes=1, gurobi_models_dir=None, instances_indexes=[0]):
 ########################################################################################################################
 
 
-def compute_real_cost_with_c_virt(virtual_costs_filename, num_episodes=200, instances_indexes=[0]):
+def compute_real_cost_with_c_virt(virtual_costs, instances_indexes, num_episodes=200):
     """
     Compute the real cost for a set of instances given the virtual cost associated to the storage.
-    :param virtual_costs_filename: string; path from which the virtual costs are loaded.
+    :param virtual_costs: string; path from which the virtual costs are loaded.
     :param num_episodes: int; the number of episodes to run.
     :param instances_indexes: list of int; the indexes of the instances to be considered.
     :return:
     """
+
+    assert isinstance(virtual_costs, (str, np.ndarray)), \
+        "You must specify either the filename or the values of the virtual costs"
+
+    if isinstance(virtual_costs, str):
+        virtual_costs = np.load(virtual_costs, allow_pickle=True)
 
     random.seed(0)
 
@@ -113,7 +125,7 @@ def compute_real_cost_with_c_virt(virtual_costs_filename, num_episodes=200, inst
     timestamps = timestamps_headers(env.n)
 
     # Keep track of the total cost
-    total_cost = 0
+    real_costs = []
 
     # Run the episodes
     for i_episode in range(num_episodes):
@@ -123,25 +135,29 @@ def compute_real_cost_with_c_virt(virtual_costs_filename, num_episodes=200, inst
         # Reset the environment and get the instance index
         env.reset()
 
-        virtual_cost, objList, real_cost = OnlineHeuristic.heur(pRenPV=np.expand_dims(env.pRenPVreal, axis=0),
-                                                                tot_cons=np.expand_dims(env.tot_cons_real, axis=0),
-                                                                virtual_costs_filename=virtual_costs_filename,
-                                                                display=False)
+        results = OnlineHeuristic.heur(pRenPV=np.expand_dims(env.pRenPVreal, axis=0),
+                                       tot_cons=np.expand_dims(env.tot_cons_real, axis=0),
+                                       virtual_costs=virtual_costs,
+                                       display=True)
 
-        total_cost += real_cost
+        real_cost = results['real cost']
+        virtual_cost = results['virtual cost']
 
-        print(f'\nHeuristic cost: {real_cost} | Virtual cost: {virtual_cost}\n')
+        real_costs.append(real_cost)
+
+        print(f'\nReal cost: {real_cost} | Virtual cost: {virtual_cost}\n')
 
         print('-' * 200 + '\n')
 
-    print(f'\nMean cost: {total_cost / num_episodes}\n')
+    print(f'\nMean cost: {np.mean(real_costs)}\n')
 
     env.close()
+
+    return results
 
 ########################################################################################################################
 
 
-# FIXME: this function has to be fixed considering the new reward function
 def check_markovian_env(num_episodes=100):
     """
     Simple test function to check that the environment is working properly
@@ -184,14 +200,19 @@ def check_markovian_env(num_episodes=100):
                 break
 
         if step.env_info['feasible']:
-            _, _, real_cost, all_real_costs = OnlineHeuristic.heur(pRenPV=np.expand_dims(env.pRenPVreal, axis=0),
-                                                                   tot_cons=np.expand_dims(env.tot_cons_real, axis=0),
-                                                                   display=False)
+            results = OnlineHeuristic.heur(pRenPV=np.expand_dims(env.pRenPVreal, axis=0),
+                                           tot_cons=np.expand_dims(env.tot_cons_real, axis=0),
+                                           display=False)
+
+            real_cost = results['real cost']
+            all_real_costs = results['all real costs']
 
             assert_almost_equal(total_cost,
                                 real_cost,
                                 decimal=10), "Cost computed by heur() method and sum of the rewards are different"
             assert np.array_equal(all_rewards, all_real_costs), "Rewards are not the same"
+
+            print(f'Cumulative reward: {total_cost} | Cost computed by original method: {real_cost}')
 
     env.close()
 
@@ -199,9 +220,7 @@ def check_markovian_env(num_episodes=100):
 
 
 # NOTE: set the logdir
-@wrap_experiment(log_dir=os.path.join('models', 'gaussian-a2c', 'experiment-2'),
-                 archive_launch_repo=False,
-                 use_existing_dir=True)
+@wrap_experiment(log_dir='models/mdp-env_1')
 def train_rl_algo(ctxt=None, test_split=0.25, num_epochs=1000):
     """
 
@@ -231,14 +250,14 @@ def train_rl_algo(ctxt=None, test_split=0.25, num_epochs=1000):
             raise Exception("test_split must be list of int or float")
 
         # Create the environment
-        env = VPPEnv(predictions=train_predictions,
+        env = MarkovianVPPEnv(predictions=train_predictions,
                      shift=shift,
                      cGrid=cGrid,
                      noise_std_dev=0.02,
                      savepath=None)
 
         # Garage wrapping of a gym environment
-        env = GymEnv(env, max_episode_length=1)
+        env = GymEnv(env, max_episode_length=96)
 
         # A policy represented by a Gaussian distribution which is parameterized by a multilayer perceptron (MLP)
         policy = GaussianMLPPolicy(env.spec)
@@ -250,7 +269,7 @@ def train_rl_algo(ctxt=None, test_split=0.25, num_epochs=1000):
         # it was called from.
         sampler = LocalSampler(agents=policy,
                                envs=env,
-                               max_episode_length=1,
+                               max_episode_length=96,
                                is_tf_worker=True)
 
         # Vanilla Policy Gradient
@@ -258,11 +277,11 @@ def train_rl_algo(ctxt=None, test_split=0.25, num_epochs=1000):
                    baseline=baseline,
                    policy=policy,
                    sampler=sampler,
-                   discount=1,
+                   discount=0.99,
                    optimizer_args=dict(learning_rate=0.01, ))
 
         trainer.setup(algo, env)
-        trainer.train(n_epochs=num_epochs, batch_size=200, plot=False)
+        trainer.train(n_epochs=num_epochs, batch_size=100 * 96, plot=False)
 
 
 ########################################################################################################################
@@ -298,12 +317,13 @@ def test_rl_algo(log_dir, num_episodes=100):
 
             # Perform an episode
             while not done:
-                env.render(mode='ascii')
-
+                # env.render(mode='ascii')
                 a, agent_info = policy.get_action(last_obs)
                 a = agent_info['mean']
-                print('\nAction')
-                print(tabulate(np.expand_dims(a, axis=0), headers=timestamps, tablefmt='pretty'))
+                a.dump(os.path.join(log_dir, 'cvirt.npy'))
+
+                '''print('\nAction')
+                print(tabulate(np.expand_dims(a, axis=0), headers=timestamps, tablefmt='pretty'))'''
 
                 step = env.step(a)
 
@@ -313,7 +333,7 @@ def test_rl_algo(log_dir, num_episodes=100):
 
                 if step.terminal or step.timeout:
                     break
-                last_obs = step.obs
+                last_obs = step.observation
 
         print(f'\nMean reward: {-total_reward / num_episodes}')
 
@@ -338,8 +358,17 @@ def resume_experiment(ctxt, saved_dir):
 
 if __name__ == '__main__':
     # check_env(num_episodes=500, gurobi_models_dir='gurobi-models')
-    # compute_real_cost_with_c_virt(virtual_costs_filename='data/optParPred0.npy')
-    # train_rl_algo(test_split=[0], num_epochs=100)
-    check_markovian_env()
-    # test_rl_algo(log_dir=os.path.join('models', 'gaussian-a2c', 'experiment-1'),
-    #              num_episodes=500)
+    i = 0
+    compute_real_cost_with_c_virt(virtual_costs=f'models/single-step-env_{i+1}/cvirt.npy',
+                                  instances_indexes=[i],
+                                  num_episodes=1)
+
+    '''for i in range(10):
+        tf.compat.v1.disable_eager_execution()
+        tf.compat.v1.reset_default_graph()
+        train_rl_algo(test_split=[i], num_epochs=100)'''
+
+    # check_markovian_env()
+    '''for i in range(1, 11):
+        test_rl_algo(log_dir=os.path.join('models', f'single-step-env_{i}'),
+                     num_episodes=1)'''
