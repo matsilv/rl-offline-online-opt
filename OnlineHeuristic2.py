@@ -127,8 +127,7 @@ def heur (mr,namefile):
             # mod.addConstr(change[i]>= (phiX - phi[i]))
 
         #Objective function
-            obf = (cGrid[i]*pGridOut[i]+cDiesel*pDiesel[i]+cGridSt[i]*pStorageIn[i]-cGrid[i]*pGridIn[i]+cGridS*change[i])
-        
+            obf = (cGrid[i] * pGridOut[i] + cDiesel * pDiesel[i] + cGrid[i] * pStorageIn[i] - cGrid[i] * pGridIn[i])
             mod.setObjective(obf)
 
             solve(mod)
@@ -158,12 +157,12 @@ def heur (mr,namefile):
 
         a10 = shift
         data = np.array([a1, a2, a3, a9, a6, a7, a4, a5, a8, a10])
-        for k in range(1, len(objList), 96):
+        for k in range(0, len(objList), 96):
             ob = sum(objList[k:k+96])
         objFinal.append(ob)
         
 
-        for k in range(1, len(runList), 96):
+        for k in range(0, len(runList), 96):
             run = sum(runList[k:k+96])
         runFinal.append(round(run,2))
 
@@ -204,6 +203,15 @@ def heur (mr,namefile):
         table.append(storage_capacity)
 
         print(tabulate(table, headers=timestamps, tablefmt='pretty'))
+
+        cGrid = np.array(cGrid)
+        a2 = np.array(a2)
+        a6 = np.array(a6)
+        a7 = np.array(a7)
+
+        real_cost = cGrid * a7 - cGrid * a6 + cDiesel * a2
+
+        print(f'Real cost: {sum(real_cost)}')
 
         return objFinal, objList
 

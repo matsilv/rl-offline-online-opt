@@ -7,7 +7,7 @@ import numpy as np
 import pandas as pd
 import random
 import sys
-import OnlineHeuristic as onHeur
+import OnlineHeuristic2 as onHeur
 
 
 if __name__ == '__main__':
@@ -18,4 +18,4 @@ if __name__ == '__main__':
     nome_script, fileName, mr= sys.argv
 
     mr = int(mr)
-    cost, _, _, _ = onHeur.heur(mr,fileName)
+    onHeur.heur(mr,fileName)

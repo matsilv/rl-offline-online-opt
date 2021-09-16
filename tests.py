@@ -11,6 +11,8 @@ from garage.tf.policies import GaussianMLPPolicy
 from garage.trainer import TFTrainer
 from garage import wrap_experiment
 from garage.envs import GymEnv
+from garage.experiment.deterministic import set_seed
+from garage.envs.normalized_env import NormalizedEnv
 import tensorflow as tf
 import cloudpickle
 import os
@@ -138,7 +140,7 @@ def compute_real_cost_with_c_virt(virtual_costs, instances_indexes, num_episodes
         results = OnlineHeuristic.heur(pRenPV=np.expand_dims(env.pRenPVreal, axis=0),
                                        tot_cons=np.expand_dims(env.tot_cons_real, axis=0),
                                        virtual_costs=virtual_costs,
-                                       display=True)
+                                       display=False)
 
         real_cost = results['real cost']
         virtual_cost = results['virtual cost']
@@ -220,7 +222,7 @@ def check_markovian_env(num_episodes=100):
 
 
 # NOTE: set the logdir
-@wrap_experiment(log_dir='models/mdp-env_1')
+@wrap_experiment(log_dir='models/mdp_0', use_existing_dir=False)
 def train_rl_algo(ctxt=None, test_split=0.25, num_epochs=1000):
     """
 
@@ -230,6 +232,8 @@ def train_rl_algo(ctxt=None, test_split=0.25, num_epochs=1000):
     :param num_epochs: int; number of training epochs.
     :return:
     """
+
+    # set_seed(1)
 
     # A trainer provides a default TensorFlow session using python context
     with TFTrainer(snapshot_config=ctxt) as trainer:
@@ -257,7 +261,10 @@ def train_rl_algo(ctxt=None, test_split=0.25, num_epochs=1000):
                      savepath=None)
 
         # Garage wrapping of a gym environment
-        env = GymEnv(env, max_episode_length=96)
+        env = GymEnv(env, max_episode_length=TIMESTEP_IN_A_DAY)
+
+        # Normalize observations
+        env = NormalizedEnv(env, normalize_obs=True)
 
         # A policy represented by a Gaussian distribution which is parameterized by a multilayer perceptron (MLP)
         policy = GaussianMLPPolicy(env.spec)
@@ -269,7 +276,7 @@ def train_rl_algo(ctxt=None, test_split=0.25, num_epochs=1000):
         # it was called from.
         sampler = LocalSampler(agents=policy,
                                envs=env,
-                               max_episode_length=96,
+                               max_episode_length=TIMESTEP_IN_A_DAY,
                                is_tf_worker=True)
 
         # Vanilla Policy Gradient
@@ -281,7 +288,7 @@ def train_rl_algo(ctxt=None, test_split=0.25, num_epochs=1000):
                    optimizer_args=dict(learning_rate=0.01, ))
 
         trainer.setup(algo, env)
-        trainer.train(n_epochs=num_epochs, batch_size=100 * 96, plot=False)
+        trainer.train(n_epochs=num_epochs, batch_size=100 * TIMESTEP_IN_A_DAY, plot=False)
 
 
 ########################################################################################################################
@@ -306,36 +313,39 @@ def test_rl_algo(log_dir, num_episodes=100):
         env = data['env']
 
         policy = algo.policy
-        policy.reset()
 
         timestamps = timestamps_headers(env.n)
+        all_rewards = []
 
         total_reward = 0
         for episode in range(num_episodes):
             last_obs, _ = env.reset()
             done = False
 
+            episode_reward = 0
+
             # Perform an episode
             while not done:
                 # env.render(mode='ascii')
                 a, agent_info = policy.get_action(last_obs)
                 a = agent_info['mean']
-                a.dump(os.path.join(log_dir, 'cvirt.npy'))
 
                 '''print('\nAction')
                 print(tabulate(np.expand_dims(a, axis=0), headers=timestamps, tablefmt='pretty'))'''
 
                 step = env.step(a)
 
-                total_reward += step.reward
-
-                print(f'\nCost: {-step.reward}')
+                total_reward -= step.reward
+                episode_reward -= step.reward
 
                 if step.terminal or step.timeout:
                     break
                 last_obs = step.observation
 
-        print(f'\nMean reward: {-total_reward / num_episodes}')
+            print(f'\nTotal reward: {episode_reward}')
+            all_rewards.append(episode_reward)
+
+        print(f'\nMean reward: {sum(all_rewards) / len(all_rewards)}')
 
 ########################################################################################################################
 
@@ -358,17 +368,16 @@ def resume_experiment(ctxt, saved_dir):
 
 if __name__ == '__main__':
     # check_env(num_episodes=500, gurobi_models_dir='gurobi-models')
-    i = 0
-    compute_real_cost_with_c_virt(virtual_costs=f'models/single-step-env_{i+1}/cvirt.npy',
+    i = 5
+    compute_real_cost_with_c_virt(virtual_costs=np.zeros(shape=(96, )),
                                   instances_indexes=[i],
-                                  num_episodes=1)
+                                  num_episodes=100)
 
-    '''for i in range(10):
+    '''for i in range(0, 10):
         tf.compat.v1.disable_eager_execution()
         tf.compat.v1.reset_default_graph()
         train_rl_algo(test_split=[i], num_epochs=100)'''
 
     # check_markovian_env()
-    '''for i in range(1, 11):
-        test_rl_algo(log_dir=os.path.join('models', f'single-step-env_{i}'),
-                     num_episodes=1)'''
+    test_rl_algo(log_dir=os.path.join('models', f'mdp_{i}'),
+                 num_episodes=100)

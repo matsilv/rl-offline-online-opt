@@ -10,6 +10,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 from matplotlib.ticker import FormatStrFormatter
 import seaborn as sns
+import os, shutil
 
 ########################################################################################################################
 
@@ -217,6 +218,10 @@ class VPPEnv(Env):
         self.tot_cons_real = None
         self.mr = None
 
+        # FIXME: remove
+        # shutil.rmtree('temp')
+        # os.mkdir('temp')
+
     def _solve(self, c_virt):
         """
         Solve the optimization model with the greedy heuristic.
@@ -291,6 +296,9 @@ class VPPEnv(Env):
             mod.setObjective(obf)
 
             feasible = solve(mod)
+
+            # FIXME: remove
+            # mod.write(f'temp/model_{i}.lp')
 
             # If one of the timestep is not feasible, get out of the loop
             if not feasible:
@@ -439,7 +447,7 @@ class MarkovianVPPEnv(Env):
         self.pDieselMax = 1200
 
         # Here we define the observation and action spaces
-        self.observation_space = Box(low=0, high=np.inf, shape=(self.n * 2 + 1,), dtype=np.float32)
+        self.observation_space = Box(low=-np.inf, high=np.inf, shape=(self.n * 3 + 2,), dtype=np.float32)
         self.action_space = Box(low=-np.inf, high=np.inf, shape=(1,), dtype=np.float32)
 
         # We randomly choose an instance
@@ -459,6 +467,9 @@ class MarkovianVPPEnv(Env):
 
         # Set the timestep
         self.timestep = 0
+
+        # Set the cumulative cost
+        self.cumulative_cost = 0
 
         # Initialize the storage
         self.storage = self.inCap
@@ -520,7 +531,11 @@ class MarkovianVPPEnv(Env):
         """
 
         observations = np.concatenate((self.pRenPVpred.copy(), self.tot_cons_pred.copy()), axis=0)
+        one_hot_timestep = np.zeros(shape=(self.n, ))
+        one_hot_timestep[int(self.timestep)] = 1
+        observations = np.concatenate((observations, one_hot_timestep), axis=0)
         observations = np.append(observations, self.storage)
+        observations = np.append(observations, self.cumulative_cost)
         observations = np.squeeze(observations)
 
         return observations
@@ -537,6 +552,7 @@ class MarkovianVPPEnv(Env):
         self.mr = None
         self.storage = self.inCap
         self.timestep = 0
+        self.cumulative_cost = 0
 
     def _solve(self, c_virt):
         """
@@ -651,6 +667,9 @@ class MarkovianVPPEnv(Env):
             # The reward is the negative real cost
             reward = -self._compute_real_cost(models)
 
+        # Update the cumulative cost
+        self.cumulative_cost -= reward
+
         # self._render_solution(objFinal, runFinal)
 
         observations = self._get_observations()
@@ -658,7 +677,7 @@ class MarkovianVPPEnv(Env):
         # Update the timestep
         self.timestep += 1
 
-        if self.timestep == self.n:
+        if self.timestep == self.n or not feasible:
             done = True
         elif self.timestep < self.n:
             done = False

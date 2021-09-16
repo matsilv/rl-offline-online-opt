@@ -92,7 +92,7 @@ def heur(mr=None,
     cGrid = np.load('data/gmePrices.npy')
     cGridS = np.mean(cGrid)
 
-    #Set the virtual costs
+    # Set the virtual costs
     if virtual_costs is None:
         c_virt = cGrid.copy()
     else:
