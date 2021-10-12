@@ -275,10 +275,10 @@ def heur(mr=None,
             energy_sold.append(optimal_pGridIn)
 
             optimal_pStorageIn = model.getVarByName('pStorageIn_' + str(timestep)).X
-            storage_consumptions.append(optimal_pStorageIn)
+            storage_charging.append(optimal_pStorageIn)
 
             optimal_pStorageOut = model.getVarByName('pStorageOut_' + str(timestep)).X
-            storage_charging.append(optimal_pStorageOut)
+            storage_consumptions.append(optimal_pStorageOut)
 
             optimal_cap = model.getVarByName('cap_' + str(timestep)).X
             storage_capacity.append(optimal_cap)
@@ -300,45 +300,251 @@ def heur(mr=None,
             timestamps = timestamps_headers(num_timeunits=96)
             table = list()
 
-            visualization_df = pd.DataFrame()
+            visualization_df = pd.DataFrame(index=timestamps)
 
-            visualization_df['pDiesel'] = diesel_power_consumptions.copy()
+            visualization_df['Diesel power consumption'] = diesel_power_consumptions.copy()
             diesel_power_consumptions.insert(0, 'pDiesel')
             table.append(diesel_power_consumptions)
 
-            visualization_df['pStorageIn'] = storage_consumptions.copy()
-            storage_consumptions.insert(0, 'pStorageIn')
-            table.append(storage_consumptions)
-
-            visualization_df['pStorageOut'] = storage_charging
-            storage_charging.insert(0, 'pStorageOut')
+            visualization_df['Input to storage'] = storage_charging.copy()
+            storage_charging.insert(0, 'pStorageIn')
             table.append(storage_charging)
 
-            visualization_df['pGridIn'] = energy_sold
+            visualization_df['Output from storage'] = storage_consumptions
+            storage_consumptions.insert(0, 'pStorageOut')
+            table.append(storage_consumptions)
+
+            visualization_df['Energy sold'] = energy_sold
             energy_sold.insert(0, 'pGridIn')
             table.append(energy_sold)
 
-            visualization_df['pGridOut'] = energy_bought
+            visualization_df['Energy bought'] = energy_bought
             energy_bought.insert(0, 'pGridOut')
             table.append(energy_bought)
 
-            visualization_df['cap'] = storage_capacity
+            visualization_df['Storage capacity'] = storage_capacity
             storage_capacity.insert(0, 'cap')
             table.append(storage_capacity)
 
             print(tabulate(table, headers=timestamps, tablefmt='pretty'))
-            visualization_df.plot(subplots=True)
-            plt.show()
 
         return {'feasible': True,
                 'real cost': real_cost,
                 'all real costs': all_real_costs,
                 'virtual cost': objFinal,
-                'all virtual costs': objList}
+                'all virtual costs': objList,
+                'dataframe': visualization_df}
 
 ########################################################################################################################
 
 
+def compute_real_cost(mr, namefile, virtual_costs, display):
+
+    # Check that all the required files exist
+    gmePrices_filename = os.path.join('data', 'gmePrices.npy')
+    optShift_filename = os.path.join('data', 'optShift.npy')
+
+    assert os.path.isfile(namefile), f"{namefile} does not exist"
+    assert os.path.isfile(gmePrices_filename), f"{gmePrices_filename} does not exist"
+    assert os.path.isfile(optShift_filename), f"{optShift_filename} does not exist"
+
+    # timestamp
+    n = 96
+
+    # price data from GME
+    cGrid = np.load(gmePrices_filename)
+    cGridS = np.mean(cGrid)
+
+    # Get virtual costs
+    if isinstance(virtual_costs, str):
+        assert os.path.isfile(virtual_costs), f"{virtual_costs} does not exist"
+        cvirt = np.load(virtual_costs, allow_pickle=True)
+    elif isinstance(virtual_costs, np.ndarray) and virtual_costs.shape == (n, ):
+        cvirt = virtual_costs
+    else:
+        raise Exception(f"virtual_costs must be a string representing a filepath or a numpy array of shape ({n}, )")
+
+    # capacities, bounds, parameters and prices
+    cap, change, phi, notphi, pDiesel, pStorageIn, pStorageOut, pGridIn, pGridOut, tilde_cons = [
+        [None] * n for i in range(10)]
+    capMax = 1000
+    inCap = 800
+    capX = inCap
+    cDiesel = 0.054
+    cRU = 0.35
+    pDieselMax = 1200
+    runtime = 0
+    phiX = 0
+
+    # read instances
+    instances = pd.read_csv(namefile)
+
+    # instances pv from file
+    instances['PV(kW)'] = instances['PV(kW)'].map(lambda entry: entry[1:-1].split())
+    instances['PV(kW)'] = instances['PV(kW)'].map(lambda entry: list(np.float_(entry)))
+    pRenPV = instances['PV(kW)'][mr]
+
+    # instances load from file
+    instances['Load(kW)'] = instances['Load(kW)'].map(lambda entry: entry[1:-1].split())
+    instances['Load(kW)'] = instances['Load(kW)'].map(lambda entry: list(np.float_(entry)))
+    tot_cons = instances['Load(kW)'][mr]
+
+    # Load optimal demand shifts from file
+    shift = np.load(optShift_filename)
+
+    # Utility variables to keep track of the results
+    real_cost = 0
+    virtual_cost = 0
+    diesel_power_consumptions = []
+    storage_consumptions = []
+    storage_charging = []
+    energy_sold = []
+    energy_bought = []
+    storage_capacity = []
+
+    # Solve each optimization step
+    for i in range(n):
+
+        # create a model
+        mod = Model()
+
+        # build variables and define bounds
+        pDiesel[i] = mod.addVar(vtype=GRB.CONTINUOUS, name="pDiesel_" + str(i))
+        pStorageIn[i] = mod.addVar(vtype=GRB.CONTINUOUS, name="pStorageIn_" + str(i))
+        pStorageOut[i] = mod.addVar(vtype=GRB.CONTINUOUS, name="pStorageOut_" + str(i))
+        pGridIn[i] = mod.addVar(vtype=GRB.CONTINUOUS, name="pGridIn_" + str(i))
+        pGridOut[i] = mod.addVar(vtype=GRB.CONTINUOUS, name="pGridOut_" + str(i))
+        cap[i] = mod.addVar(vtype=GRB.CONTINUOUS, name="cap_" + str(i))
+        # change[i] = mod.addVar(vtype=GRB.INTEGER, name="change")
+        # phi[i] = mod.addVar(vtype=GRB.BINARY, name="phi")
+        # notphi[i] = mod.addVar(vtype=GRB.BINARY, name="notphi")
+
+        #################################################
+        # Shift from Demand Side Energy Management System
+        #################################################
+
+        tilde_cons[i] = (shift[i] + tot_cons[i])
+
+        ####################
+        # Model constraints
+        ####################
+
+        # more sophisticated storage constraints
+        # mod.addConstr(notphi[i]==1-phi[i])
+        # mod.addGenConstrIndicator(phi[i], True, pStorageOut[i], GRB.LESS_EQUAL, 0)
+        # mod.addGenConstrIndicator(notphi[i], True, pStorageIn[i], GRB.LESS_EQUAL, 0)
+
+        # power balance constraint
+        mod.addConstr((pRenPV[i] + pStorageOut[i] + pGridOut[i] + pDiesel[i] - pStorageIn[i] - pGridIn[i] ==
+                       tilde_cons[i]), "Power balance")
+
+        # Storage cap
+        mod.addConstr(cap[i] == capX + pStorageIn[i] - pStorageOut[i])
+        mod.addConstr(cap[i] <= capMax)
+
+        mod.addConstr(pStorageIn[i] <= capMax - (capX))
+        mod.addConstr(pStorageOut[i] <= capX)
+
+        mod.addConstr(pStorageIn[i] <= 200)
+        mod.addConstr(pStorageOut[i] <= 200)
+
+        # Diesel and Net cap
+        mod.addConstr(pDiesel[i] <= pDieselMax)
+        mod.addConstr(pGridIn[i] <= 600)
+
+        # Storage mode change
+        # mod.addConstr(change[i]>=0)
+        # mod.addConstr(change[i]>= (phi[i] - phiX))
+        # mod.addConstr(change[i]>= (phiX - phi[i]))
+
+        # Objective function
+        obf = (cGrid[i] * pGridOut[i] + cDiesel * pDiesel[i] + cvirt[i] * pStorageIn[i] - cGrid[i] * pGridIn[i])
+        # for using storage constraints for mode change we have to add cRU*change in the objective function
+
+        mod.setObjective(obf)
+
+        assert solve(mod), "The model is infeasible"
+
+        # Compute real and virtual costs
+        real_cost += (cGrid[i] * pGridOut[i].X + cDiesel * pDiesel[i].X - cGrid[i] * pGridIn[i].X)
+        virtual_cost += mod.objVal
+
+        # Update the storage capacity
+        capX = cap[i].x
+        # phiX = phi[i].x
+
+        # Keep track of the decision variables
+        energy_bought.append(pGridOut[i].X)
+        energy_sold.append(pGridIn[i].X)
+        diesel_power_consumptions.append(pDiesel[i].X)
+        storage_charging.append(pStorageIn[i].X)
+        storage_consumptions.append(pStorageOut[i].X)
+        storage_capacity.append(cap[i].X)
+
+        # Keep track of the runtime
+        runtime += mod.Runtime * 60
+
+    # Optionally, display the solution and the decision variables
+    if display:
+        print("\n============================== Solution =================================\n\n")
+
+        print(f'The virtual cost is: {virtual_cost}')
+        print(f"The solution cost (in keuro) is: {real_cost}\n")
+        print(f"The runtime (in sec) is: {runtime}\n")
+
+        timestamps = timestamps_headers(num_timeunits=96)
+        table = list()
+
+        visualization_df = pd.DataFrame(index=timestamps)
+
+        visualization_df['Diesel power consumption'] = diesel_power_consumptions.copy()
+        diesel_power_consumptions.insert(0, 'pDiesel')
+        table.append(diesel_power_consumptions)
+
+        visualization_df['Input to storage'] = storage_charging.copy()
+        storage_charging.insert(0, 'pStorageIn')
+        table.append(storage_charging)
+
+        visualization_df['Output from storage'] = storage_consumptions
+        storage_consumptions.insert(0, 'pStorageOut')
+        table.append(storage_consumptions)
+
+        visualization_df['Energy sold'] = energy_sold
+        energy_sold.insert(0, 'pGridIn')
+        table.append(energy_sold)
+
+        visualization_df['Energy bought'] = energy_bought
+        energy_bought.insert(0, 'pGridOut')
+        table.append(energy_bought)
+
+        visualization_df['Storage capacity'] = storage_capacity
+        storage_capacity.insert(0, 'cap')
+        table.append(storage_capacity)
+
+        # print(tabulate(table, headers=timestamps, tablefmt='pretty'))
+
+        axes = visualization_df.plot(subplots=True, fontsize=12, figsize=(10, 7))
+        plt.xlabel('Timestamp', fontsize=14)
+
+        for axis in axes:
+            axis.legend(loc=2, prop={'size': 12})
+        plt.plot()
+        plt.show()
+
+########################################################################################################################
+
+
+if __name__ == '__main__':
+    if len(sys.argv) < 3:
+        print("ERROR! Usage: python scriptName.py  instancesFilename.csv virtualCostsFilename.npy instanceId\n")
+        sys.exit(1)
+
+    nome_script, instances_filename, virtual_costs_filename, instance_idx = sys.argv
+
+    compute_real_cost(mr=int(instance_idx),
+                      namefile=instances_filename,
+                      virtual_costs=virtual_costs_filename,
+                      display=True)
 
 
 

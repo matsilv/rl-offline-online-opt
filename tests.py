@@ -17,6 +17,8 @@ import tensorflow as tf
 import cloudpickle
 import os
 import random
+import seaborn as sns
+import matplotlib.pyplot as plt
 
 ########################################################################################################################
 
@@ -92,74 +94,6 @@ def check_env(num_episodes=1, gurobi_models_dir=None, instances_indexes=[0]):
 ########################################################################################################################
 
 
-def compute_real_cost_with_c_virt(virtual_costs, instances_indexes, num_episodes=200):
-    """
-    Compute the real cost for a set of instances given the virtual cost associated to the storage.
-    :param virtual_costs: string; path from which the virtual costs are loaded.
-    :param num_episodes: int; the number of episodes to run.
-    :param instances_indexes: list of int; the indexes of the instances to be considered.
-    :return:
-    """
-
-    assert isinstance(virtual_costs, (str, np.ndarray)), \
-        "You must specify either the filename or the values of the virtual costs"
-
-    if isinstance(virtual_costs, str):
-        virtual_costs = np.load(virtual_costs, allow_pickle=True)
-
-    random.seed(0)
-
-    # Load predictions, shifts and prices
-    predictions = pd.read_csv('data/instancesPredictionsNew.csv')
-    predictions = predictions.iloc[instances_indexes]
-    shift = np.load('data/optShift.npy')
-    cGrid = np.load('data/gmePrices.npy')
-
-    # Create the environment and a garage wrapper for Gym environments
-    env = VPPEnv(predictions=predictions,
-                 shift=shift,
-                 cGrid=cGrid,
-                 noise_std_dev=0.02,
-                 savepath=None)
-    env = GymEnv(env)
-
-    # Timestamps headers for visualization
-    timestamps = timestamps_headers(env.n)
-
-    # Keep track of the total cost
-    real_costs = []
-
-    # Run the episodes
-    for i_episode in range(num_episodes):
-
-        print(f'Episode: {i_episode + 1}/{num_episodes}')
-
-        # Reset the environment and get the instance index
-        env.reset()
-
-        results = OnlineHeuristic.heur(pRenPV=np.expand_dims(env.pRenPVreal, axis=0),
-                                       tot_cons=np.expand_dims(env.tot_cons_real, axis=0),
-                                       virtual_costs=virtual_costs,
-                                       display=False)
-
-        real_cost = results['real cost']
-        virtual_cost = results['virtual cost']
-
-        real_costs.append(real_cost)
-
-        print(f'\nReal cost: {real_cost} | Virtual cost: {virtual_cost}\n')
-
-        print('-' * 200 + '\n')
-
-    print(f'\nMean cost: {np.mean(real_costs)}\n')
-
-    env.close()
-
-    return results
-
-########################################################################################################################
-
-
 def check_markovian_env(num_episodes=100):
     """
     Simple test function to check that the environment is working properly
@@ -222,14 +156,20 @@ def check_markovian_env(num_episodes=100):
 
 
 # NOTE: set the logdir
-@wrap_experiment(log_dir='models/mdp_0', use_existing_dir=False)
-def train_rl_algo(ctxt=None, test_split=0.25, num_epochs=1000):
+@wrap_experiment(log_dir='models/tmp-normalized-rew', use_existing_dir=False)
+def train_rl_algo(ctxt=None,
+                  mdp=False,
+                  test_split=0.25,
+                  num_epochs=1000,
+                  noise_std_dev=0.01):
     """
 
     :param ctxt: garage.experiment.SnapshotConfig; the snapshot configuration used by Trainer to create the snapshotter.
                                                    If None, it will create one with default settings.
+    :param mdp: boolean; True if you want to use the MDP version of the environment.
     :param test_split: float; float or list of int; fraction or indexes of the instances to be used for test.
     :param num_epochs: int; number of training epochs.
+    :param noise_std_dev: float; standard deviation for the additive gaussian noise.
     :return:
     """
 
@@ -239,7 +179,99 @@ def train_rl_algo(ctxt=None, test_split=0.25, num_epochs=1000):
     with TFTrainer(snapshot_config=ctxt) as trainer:
 
         # Load data from file
-        predictions = pd.read_csv('data/instancesPredictionsNew.csv')
+        predictions = pd.read_csv('data/InstancesPredictionsNewSample.csv')
+        shift = np.load('data/optShift.npy')
+        cGrid = np.load('data/gmePrices.npy')
+
+        # Split between training and test
+        if isinstance(test_split, float):
+            split_index = int(len(predictions) * (1 - test_split))
+            train_predictions = predictions[:split_index]
+        elif isinstance(test_split, list):
+            split_index = test_split
+            train_predictions = predictions.iloc[split_index]
+        else:
+            raise Exception("test_split must be list of int or float")
+
+        if mdp:
+            max_episode_length = TIMESTEP_IN_A_DAY
+            discount = 0.99
+
+            # Create the environment
+            env = MarkovianVPPEnv(predictions=train_predictions,
+                                  shift=shift,
+                                  cGrid=cGrid,
+                                  noise_std_dev=noise_std_dev,
+                                  savepath=None)
+
+            # Garage wrapping of a gym environment
+            env = GymEnv(env, max_episode_length=max_episode_length)
+
+            # Normalize observations
+            env = NormalizedEnv(env, normalize_obs=True)
+        else:
+            max_episode_length = 1
+            discount = 0
+
+            # Create the environment
+            env = VPPEnv(predictions=train_predictions,
+                         shift=shift,
+                         cGrid=cGrid,
+                         noise_std_dev=noise_std_dev,
+                         savepath=None)
+
+            # Garage wrapping of a gym environment
+            env = GymEnv(env, max_episode_length=max_episode_length)
+
+            env = NormalizedEnv(env, normalize_reward=True)
+
+        # A policy represented by a Gaussian distribution which is parameterized by a multilayer perceptron (MLP)
+        policy = GaussianMLPPolicy(env.spec)
+        obs, _ = env.reset()
+
+        # A value function using a MLP network.
+        baseline = ContinuousMLPBaseline(env_spec=env.spec)
+
+        # It's called the "Local" sampler because it runs everything in the same process and thread as where
+        # it was called from.
+        sampler = LocalSampler(agents=policy,
+                               envs=env,
+                               max_episode_length=max_episode_length,
+                               is_tf_worker=True)
+
+        # Vanilla Policy Gradient
+        algo = VPG(env_spec=env.spec,
+                   baseline=baseline,
+                   policy=policy,
+                   sampler=sampler,
+                   discount=discount,
+                   optimizer_args=dict(learning_rate=0.01, ))
+
+        trainer.setup(algo, env)
+        trainer.train(n_epochs=num_epochs, batch_size=100 * max_episode_length, plot=False)
+
+########################################################################################################################
+
+
+def test_rl_algo(log_dir, test_split, mdp=False, num_episodes=100):
+    """
+    Test a trained agent.
+    :param log_dir: string; path where training information are saved to.
+    :param mdp: bool; True if the environment is the MDP version.
+    :param num_episodes: int; number of episodes.
+    :return:
+    """
+
+    # Create TF1 session and load all the experiments data
+    tf.compat.v1.disable_eager_execution()
+    tf.compat.v1.reset_default_graph()
+    with tf.compat.v1.Session() as sess:
+        data = cloudpickle.load(open(os.path.join(log_dir, 'params.pkl'), 'rb'))
+        # Get the agent
+        algo = data['algo']
+
+        # Load data from file
+        predictions = pd.read_csv('data/InstancesPredictionsNewSample.csv')
         shift = np.load('data/optShift.npy')
         cGrid = np.load('data/gmePrices.npy')
 
@@ -254,63 +286,11 @@ def train_rl_algo(ctxt=None, test_split=0.25, num_epochs=1000):
             raise Exception("test_split must be list of int or float")
 
         # Create the environment
-        env = MarkovianVPPEnv(predictions=train_predictions,
+        env = VPPEnv(predictions=train_predictions,
                      shift=shift,
                      cGrid=cGrid,
-                     noise_std_dev=0.02,
+                     noise_std_dev=0,
                      savepath=None)
-
-        # Garage wrapping of a gym environment
-        env = GymEnv(env, max_episode_length=TIMESTEP_IN_A_DAY)
-
-        # Normalize observations
-        env = NormalizedEnv(env, normalize_obs=True)
-
-        # A policy represented by a Gaussian distribution which is parameterized by a multilayer perceptron (MLP)
-        policy = GaussianMLPPolicy(env.spec)
-
-        # A value function using a MLP network.
-        baseline = ContinuousMLPBaseline(env_spec=env.spec)
-
-        # It's called the "Local" sampler because it runs everything in the same process and thread as where
-        # it was called from.
-        sampler = LocalSampler(agents=policy,
-                               envs=env,
-                               max_episode_length=TIMESTEP_IN_A_DAY,
-                               is_tf_worker=True)
-
-        # Vanilla Policy Gradient
-        algo = VPG(env_spec=env.spec,
-                   baseline=baseline,
-                   policy=policy,
-                   sampler=sampler,
-                   discount=0.99,
-                   optimizer_args=dict(learning_rate=0.01, ))
-
-        trainer.setup(algo, env)
-        trainer.train(n_epochs=num_epochs, batch_size=100 * TIMESTEP_IN_A_DAY, plot=False)
-
-
-########################################################################################################################
-
-
-def test_rl_algo(log_dir, num_episodes=100):
-    """
-    Test a trained agent.
-    :param log_dir: string; path where training information are saved to.
-    :param num_episodes: int; number of episodes.
-    :return:
-    """
-
-    # Create TF1 session and load all the experiments data
-    tf.compat.v1.disable_eager_execution()
-    tf.compat.v1.reset_default_graph()
-    with tf.compat.v1.Session() as sess:
-        data = cloudpickle.load(open(os.path.join(log_dir, 'params.pkl'), 'rb'))
-        # Get the agent
-        algo = data['algo']
-        # Create an environment without noise
-        env = data['env']
 
         policy = algo.policy
 
@@ -319,33 +299,38 @@ def test_rl_algo(log_dir, num_episodes=100):
 
         total_reward = 0
         for episode in range(num_episodes):
-            last_obs, _ = env.reset()
+            last_obs = env.reset()
             done = False
 
             episode_reward = 0
 
+            all_actions = []
+
             # Perform an episode
             while not done:
                 # env.render(mode='ascii')
-                a, agent_info = policy.get_action(last_obs)
+                _, agent_info = policy.get_action(last_obs)
                 a = agent_info['mean']
+                all_actions.append(np.squeeze(a))
 
-                '''print('\nAction')
-                print(tabulate(np.expand_dims(a, axis=0), headers=timestamps, tablefmt='pretty'))'''
+                observations, reward, done, _ = env.step(a)
 
-                step = env.step(a)
+                total_reward -= reward
+                episode_reward -= reward
 
-                total_reward -= step.reward
-                episode_reward -= step.reward
-
-                if step.terminal or step.timeout:
+                if done:
                     break
-                last_obs = step.observation
+                last_obs = observations
 
             print(f'\nTotal reward: {episode_reward}')
             all_rewards.append(episode_reward)
 
-        print(f'\nMean reward: {sum(all_rewards) / len(all_rewards)}')
+            if mdp:
+                all_actions = np.expand_dims(all_actions, axis=0)
+
+            print('\nAction')
+            print(tabulate(all_actions, headers=timestamps, tablefmt='pretty'))
+            np.save(os.path.join(log_dir, 'cvirt.npy'), np.squeeze(all_actions))
 
 ########################################################################################################################
 
@@ -367,17 +352,33 @@ def resume_experiment(ctxt, saved_dir):
 
 
 if __name__ == '__main__':
-    # check_env(num_episodes=500, gurobi_models_dir='gurobi-models')
-    i = 5
-    compute_real_cost_with_c_virt(virtual_costs=np.zeros(shape=(96, )),
-                                  instances_indexes=[i],
-                                  num_episodes=100)
 
-    '''for i in range(0, 10):
+    '''sns.set_style('darkgrid')
+
+    instance_idx = 3
+    results = \
+        compute_real_cost_with_c_virt(virtual_costs='models/optPar333.npy',
+                                      instances_indexes=[instance_idx],
+                                      num_episodes=1,
+                                      noise_std_dev=0,
+                                      display=True)
+
+    visualization_df = results['dataframe']
+
+    axes = visualization_df.plot(subplots=True, fontsize=12, figsize=(10, 7))
+    plt.xlabel('Timestamp', fontsize=14)
+
+    for axis in axes:
+        axis.legend(loc=2, prop={'size': 12})
+    plt.plot()
+    plt.show()'''
+
+    '''for instance_idx in range(0, 1):
         tf.compat.v1.disable_eager_execution()
         tf.compat.v1.reset_default_graph()
-        train_rl_algo(test_split=[i], num_epochs=100)'''
+        train_rl_algo(mdp=False, test_split=0.5, num_epochs=100)'''
 
-    # check_markovian_env()
-    test_rl_algo(log_dir=os.path.join('models', f'mdp_{i}'),
-                 num_episodes=100)
+    test_rl_algo(log_dir=os.path.join('models', 'tmp-normalized-rew'),
+                 test_split=0.5,
+                 num_episodes=10,
+                 mdp=False)
