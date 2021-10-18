@@ -156,15 +156,14 @@ def check_markovian_env(num_episodes=100):
 
 
 # NOTE: set the logdir
-@wrap_experiment(log_dir='models/Dataset10k/tmp', use_existing_dir=False)
+@wrap_experiment(log_dir='models/Dataset10k/mdp-env_0', use_existing_dir=False)
 def train_rl_algo(ctxt=None,
-                  loadpath=None,
                   mdp=False,
                   test_split=0.25,
                   num_epochs=1000,
                   noise_std_dev=0.01):
     """
-    :param loadpath: string; instances loadpath.
+
     :param ctxt: garage.experiment.SnapshotConfig; the snapshot configuration used by Trainer to create the snapshotter.
                                                    If None, it will create one with default settings.
     :param mdp: boolean; True if you want to use the MDP version of the environment.
@@ -174,26 +173,26 @@ def train_rl_algo(ctxt=None,
     :return:
     """
 
-    # Check the loadpath is not None
-    assert loadpath is not None, "loadpath must be initialized"
+    # set_seed(1)
 
     # A trainer provides a default TensorFlow session using python context
     with TFTrainer(snapshot_config=ctxt) as trainer:
 
-        # Set numpy seed to fix the randomly selected instances
-        np.random.seed(0)
-
         # Load data from file
-        predictions = pd.read_csv(loadpath)
+        predictions = pd.read_csv('data/Dataset10k.csv')
         shift = np.load('data/optShift.npy')
         cGrid = np.load('data/gmePrices.npy')
 
-        # Randomly choose a bunch of instances
-        instances_indexes = np.arange(0, 10000, dtype=np.int32)
-        instances_indexes = np.random.choice(instances_indexes, size=10)
-        predictions = predictions.iloc[instances_indexes]
+        # Split between training and test
+        if isinstance(test_split, float):
+            split_index = int(len(predictions) * (1 - test_split))
+            train_predictions = predictions[:split_index]
+        elif isinstance(test_split, list):
+            split_index = test_split
+            train_predictions = predictions.iloc[split_index]
+        else:
+            raise Exception("test_split must be list of int or float")
 
-        # FIXME: the Markovian version of the environment must be updated to support training/test split
         if mdp:
             max_episode_length = TIMESTEP_IN_A_DAY
             discount = 0.99
@@ -215,12 +214,10 @@ def train_rl_algo(ctxt=None,
             discount = 0
 
             # Create the environment
-            env = VPPEnv(predictions=predictions,
+            env = VPPEnv(predictions=train_predictions,
                          shift=shift,
                          cGrid=cGrid,
                          noise_std_dev=noise_std_dev,
-                         test_split=test_split,
-                         test_mode=False,
                          savepath=None)
 
             # Garage wrapping of a gym environment
@@ -254,21 +251,11 @@ def train_rl_algo(ctxt=None,
 ########################################################################################################################
 
 
-def test_rl_algo(log_dir,
-                 loadpath,
-                 test_split,
-                 mdp=False,
-                 instance_index=None,
-                 noise_std_dev=0,
-                 num_episodes=100):
+def test_rl_algo(log_dir, loadpath, test_split, mdp=False, num_episodes=100):
     """
     Test a trained agent.
     :param log_dir: string; path where training information are saved to.
-    :param loadpath: string; instances loadpath.
-    :param test_split: float; float or list of int; fraction or indexes of the instances to be used for test.
     :param mdp: bool; True if the environment is the MDP version.
-    :param instance_index: int; the index of the instance to be tested.
-    :param noise_std_dev: float; the standard deviation of the additive gaussian noise.
     :param num_episodes: int; number of episodes.
     :return:
     """
@@ -281,28 +268,37 @@ def test_rl_algo(log_dir,
         # Get the agent
         algo = data['algo']
 
-        # Set numpy seed to fix the randomly selected instances
-        np.random.seed(0)
-
         # Load data from file
         predictions = pd.read_csv(loadpath)
         shift = np.load('data/optShift.npy')
         cGrid = np.load('data/gmePrices.npy')
 
-        # Randomly choose a bunch of instances
-        instances_indexes = np.arange(0, 10000, dtype=np.int32)
-        instances_indexes = np.random.choice(instances_indexes, size=10)
-        predictions = predictions.iloc[instances_indexes]
+        # Split between training and test
+        if isinstance(test_split, float):
+            split_index = int(len(predictions) * (1 - test_split))
+            train_predictions = predictions[:split_index]
+        elif isinstance(test_split, list):
+            split_index = test_split
+            train_predictions = predictions.iloc[split_index]
+        else:
+            raise Exception("test_split must be list of int or float")
 
         # Create the environment
-        env = VPPEnv(predictions=predictions,
-                     shift=shift,
-                     cGrid=cGrid,
-                     noise_std_dev=noise_std_dev,
-                     test_split=test_split,
-                     test_mode=True,
-                     instance_idx=instance_index,
-                     savepath=None)
+        if not mdp:
+            env = VPPEnv(predictions=train_predictions,
+                         shift=shift,
+                         cGrid=cGrid,
+                         noise_std_dev=0,
+                         savepath=None)
+            env = GymEnv(env)
+        else:
+            env = MarkovianVPPEnv(predictions=train_predictions,
+                                  shift=shift,
+                                  cGrid=cGrid,
+                                  noise_std_dev=0,
+                                  savepath=None)
+            env = GymEnv(env)
+            env = NormalizedEnv(env, normalize_obs=True)
 
         policy = algo.policy
 
@@ -311,7 +307,7 @@ def test_rl_algo(log_dir,
 
         total_reward = 0
         for episode in range(num_episodes):
-            last_obs = env.reset()
+            last_obs, _ = env.reset()
             done = False
 
             episode_reward = 0
@@ -325,19 +321,17 @@ def test_rl_algo(log_dir,
                 a = agent_info['mean']
                 all_actions.append(np.squeeze(a))
 
-                observations, reward, done, _ = env.step(a)
+                step = env.step(a)
 
-                total_reward -= reward
-                episode_reward -= reward
+                total_reward -= step.reward
+                episode_reward -= step.reward
 
-                if done:
+                if step.terminal:
                     break
-                last_obs = observations
+                last_obs = step.observation
 
             print(f'\nTotal reward: {episode_reward}')
             all_rewards.append(episode_reward)
-
-            all_actions = np.array(all_actions)
 
             if mdp:
                 all_actions = np.expand_dims(all_actions, axis=0)
@@ -387,19 +381,18 @@ if __name__ == '__main__':
     plt.plot()
     plt.show()'''
 
-    '''tf.compat.v1.disable_eager_execution()
-    tf.compat.v1.reset_default_graph()
-    train_rl_algo(loadpath=os.path.join('data', 'Dataset10k.csv'),
-                  mdp=False,
-                  test_split=0.25,
-                  num_epochs=100)'''
+    indexes = [2732, 9845, 3264, 4859, 9225, 7891, 4373, 5874, 6744, 3468]
 
-    test_indexes = [7891, 4373, 5874, 6744, 3468]
+    '''for instance_idx in indexes:
+        tf.compat.v1.disable_eager_execution()
+        tf.compat.v1.reset_default_graph()
+        train_rl_algo(mdp=True,
+                      test_split=[instance_idx],
+                      num_epochs=100)'''
 
-    for idx in test_indexes:
-        test_rl_algo(log_dir=os.path.join('models', 'Dataset10k', 'tmp_5'),
+    for i, idx in enumerate(indexes):
+        test_rl_algo(log_dir=os.path.join('models', 'Dataset10k', f'mdp-env_{i}'),
                      loadpath=os.path.join('data', 'Dataset10k.csv'),
-                     test_split=0.5,
-                     instance_index=idx,
-                     num_episodes=1,
-                     mdp=False)
+                     test_split=[idx],
+                     num_episodes=200,
+                     mdp=True)

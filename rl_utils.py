@@ -71,10 +71,10 @@ def compare_cost(filepath1,
     rew1 = pd.read_csv(filepath1)['Extras/EpisodeRewardMean']
     rew2 = pd.read_csv(filepath2)['Extras/EpisodeRewardMean']
     rew1 = -rew1
-    rew1[rew1 > 500] = np.nan
+    # rew1[rew1 > 10000] = np.nan
 
     rew2 = -rew2
-    rew2[rew2 > 500] = np.nan
+    # rew2[rew2 > 10000] = np.nan
 
     plt.gca().yaxis.set_major_formatter(FormatStrFormatter('%d (k€)'))
     plt.title('Average episode reward', fontweight='bold')
@@ -109,26 +109,15 @@ class VPPEnv(Env):
                  predictions,
                  cGrid,
                  shift,
-                 test_split,
-                 test_mode,
-                 instance_idx=None,
                  noise_std_dev=0.02,
                  savepath=None):
         """
         :param predictions: pandas.Dataframe; predicted PV and Load.
         :param cGrid: numpy.array; cGrid values.
         :param shift: numpy.array; shift values.
-        :param test_split: float; fraction of the predictions to be used as test.
-        :param test_mode: bool; True to use the test predictions, False to use the training ones.
-        :param instance_idx: int; the index of the instance used for testing; it must be specified only when test_mode
-                                  is true.
         :param noise_std_dev: float; the standard deviation of the additive gaussian noise for the realizations.
         :param savepath: string; if not None, the gurobi models are saved to this directory.
         """
-
-        # Assert that the index of the instance to be tested is selected when in testing mode
-        if test_mode:
-            assert instance_idx is not None, "If testing mode is selected then you must specify the instance index"
 
         # Set numpy random seed to ensure reproducibility
         np.random.seed(0)
@@ -153,34 +142,10 @@ class VPPEnv(Env):
         self.observation_space = Box(low=0, high=np.inf, shape=(self.n * 2,), dtype=np.float32)
         self.action_space = Box(low=-np.inf, high=np.inf, shape=(self.n,), dtype=np.float32)
 
+        # We randomly choose an instance
+        self.mr = random.randint(self.predictions.index.min(), self.predictions.index.max())
+
         self.savepath = savepath
-
-        # Split between training and test set
-        split_index = int(len(self.predictions) * (1 - test_split))
-        train_predictions = self.predictions.iloc[:split_index].copy()
-        test_predictions = self.predictions.iloc[split_index:].copy()
-        assert instance_idx in test_predictions.index.values, "Instance index not valid"
-        test_predictions = test_predictions.loc[[instance_idx]]
-
-        # predicted PV for the current instance
-        pRenPVpred_train = np.array([np.array(x) for x in train_predictions['PV(kW)']])
-        pRenPVpred_test = np.array([np.array(x) for x in test_predictions['PV(kW)']])
-        self.max_pRenPVpred = np.max(pRenPVpred_train)
-
-        # predicted Load for the current instance
-        tot_cons_pred_train = np.array([np.array(x) for x in train_predictions['Load(kW)']])
-        tot_cons_pred_test = np.array([np.array(x) for x in test_predictions['Load(kW)']])
-        self.max_tot_cons_pred = np.max(tot_cons_pred_train)
-
-        # Initialize the selected instances and their index range
-        if test_mode:
-            self.instances_indexes = np.arange(0, len(test_predictions))
-            self.selected_pRenPVpred = pRenPVpred_test
-            self.selected_tot_cons_pred = tot_cons_pred_test
-        else:
-            self.instances_indexes = np.arange(0, len(train_predictions), dtype=np.int32)
-            self.selected_pRenPVpred = pRenPVpred_train
-            self.selected_tot_cons_pred = tot_cons_pred_train
 
         self._create_instance_variables()
 
@@ -190,14 +155,15 @@ class VPPEnv(Env):
         :return:
         """
 
-        assert self.selected_tot_cons_pred is not None, "selected_tot_cons_pred must be initialized"
-        assert self.selected_pRenPVpred is not None, "selected_pRenPVpred must be initialized"
-        assert self.instances_indexes is not None, "instances_indexes must be initialized"
+        assert self.mr is not None, "Instance index must be initialized"
 
-        # Randomly choose an instance and the corresponding predictions
-        self.mr = np.random.choice(self.instances_indexes, size=1).item()
-        self.pRenPVpred = self.selected_pRenPVpred[self.mr]
-        self.tot_cons_pred = self.selected_tot_cons_pred[self.mr]
+        # predicted PV for the current instance
+        self.pRenPVpred = self.predictions['PV(kW)'][self.mr]
+        self.pRenPVpred = np.asarray(self.pRenPVpred)
+
+        # predicted Load for the current instance
+        self.tot_cons_pred = self.predictions['Load(kW)'][self.mr]
+        self.tot_cons_pred = np.asarray(self.tot_cons_pred)
 
         # Loop until you find a realization which is feasible
         feasible = False
@@ -236,8 +202,8 @@ class VPPEnv(Env):
         :return: numpy.array; pv and load values for the current instance.
         """
 
-        observations = np.concatenate((self.pRenPVpred / self.max_pRenPVpred,
-                                       self.tot_cons_pred / self.max_tot_cons_pred), axis=0)
+        observations = np.concatenate((self.pRenPVpred / np.max(self.pRenPVpred),
+                                       self.tot_cons_pred / np.max(self.tot_cons_pred)), axis=0)
         observations = np.squeeze(observations)
 
         return observations
@@ -252,6 +218,10 @@ class VPPEnv(Env):
         self.tot_cons_pred = None
         self.tot_cons_real = None
         self.mr = None
+
+        # FIXME: remove
+        # shutil.rmtree('temp')
+        # os.mkdir('temp')
 
     def _solve(self, c_virt):
         """
@@ -403,6 +373,7 @@ class VPPEnv(Env):
         self._clear()
 
         # We randomly choose an instance
+        self.mr = random.randint(self.predictions.index.min(), self.predictions.index.max())
         self._create_instance_variables()
         return self._get_observations()
 
@@ -433,7 +404,6 @@ class VPPEnv(Env):
 ########################################################################################################################
 
 
-# FIXME: the class must be updated to support train/test split
 class MarkovianVPPEnv(Env):
     """
     Gym environment for the Markovian version of the VPP optimization model.
@@ -754,5 +724,7 @@ class MarkovianVPPEnv(Env):
         pass
 
 ########################################################################################################################
+
+
 
 
