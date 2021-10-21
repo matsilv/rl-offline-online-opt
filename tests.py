@@ -1,4 +1,5 @@
 from rl_utils import VPPEnv, MarkovianVPPEnv, timestamps_headers
+from utility import my_wrap_experiment
 import OnlineHeuristic
 from tabulate import tabulate
 import numpy as np
@@ -9,16 +10,13 @@ from garage.sampler import LocalSampler
 from garage.tf.algos import VPG
 from garage.tf.policies import GaussianMLPPolicy
 from garage.trainer import TFTrainer
-from garage import wrap_experiment
 from garage.envs import GymEnv
-from garage.experiment.deterministic import set_seed
 from garage.envs.normalized_env import NormalizedEnv
+from garage import wrap_experiment
 import tensorflow as tf
 import cloudpickle
 import os
 import random
-import seaborn as sns
-import matplotlib.pyplot as plt
 
 ########################################################################################################################
 
@@ -96,7 +94,8 @@ def check_env(num_episodes=1, gurobi_models_dir=None, instances_indexes=[0]):
 
 def check_markovian_env(num_episodes=100):
     """
-    Simple test function to check that the environment is working properly
+    Simple test function to check that the environment is working properly.
+    :param num_episodes: int; number of episodes.
     :return:
     """
 
@@ -155,8 +154,6 @@ def check_markovian_env(num_episodes=100):
 ########################################################################################################################
 
 
-# NOTE: set the logdir
-@wrap_experiment(log_dir='models/Dataset10k/mdp-env_0', use_existing_dir=False)
 def train_rl_algo(ctxt=None,
                   mdp=False,
                   test_split=0.25,
@@ -255,6 +252,8 @@ def test_rl_algo(log_dir, loadpath, test_split, mdp=False, num_episodes=100):
     """
     Test a trained agent.
     :param log_dir: string; path where training information are saved to.
+    :param loadpath: string; path where the instanced are loaded from.
+    :param test_split: float or list of int; fraction of the instances or list of instances indexes.
     :param mdp: bool; True if the environment is the MDP version.
     :param num_episodes: int; number of episodes.
     :return:
@@ -355,7 +354,6 @@ def resume_experiment(ctxt, saved_dir):
         trainer.restore(from_dir=saved_dir)
         trainer.resume()
 
-
 ########################################################################################################################
 
 
@@ -382,17 +380,17 @@ if __name__ == '__main__':
     plt.show()'''
 
     indexes = [2732, 9845, 3264, 4859, 9225, 7891, 4373, 5874, 6744, 3468]
+    i = 0
+    idx = indexes[i]
 
-    '''for instance_idx in indexes:
+    for instance_idx in indexes:
         tf.compat.v1.disable_eager_execution()
         tf.compat.v1.reset_default_graph()
-        train_rl_algo(mdp=True,
-                      test_split=[instance_idx],
-                      num_epochs=100)'''
+        run = my_wrap_experiment(train_rl_algo, f'models/Dataset10k/single-step-env_{instance_idx}')
+        run(num_epochs=1)
 
-    for i, idx in enumerate(indexes):
-        test_rl_algo(log_dir=os.path.join('models', 'Dataset10k', f'mdp-env_{i}'),
-                     loadpath=os.path.join('data', 'Dataset10k.csv'),
-                     test_split=[idx],
-                     num_episodes=200,
-                     mdp=True)
+    '''test_rl_algo(log_dir=os.path.join('models', 'Dataset10k', f'mdp-env_{i}'),
+                 loadpath=os.path.join('data', 'Dataset10k.csv'),
+                 test_split=[idx],
+                 num_episodes=200,
+                 mdp=True)'''

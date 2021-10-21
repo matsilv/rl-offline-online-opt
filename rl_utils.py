@@ -10,7 +10,6 @@ import pandas as pd
 import matplotlib.pyplot as plt
 from matplotlib.ticker import FormatStrFormatter
 import seaborn as sns
-import os, shutil
 
 ########################################################################################################################
 
@@ -65,6 +64,15 @@ def compare_cost(filepath1,
                  name1,
                  name2,
                  baseline=None):
+    """
+    Compare the average reward over episodes between results saved in the specified filepath.
+    :param filepath1: string; first results path.
+    :param filepath2: string; second results path.
+    :param name1: string; label name of the first plot.
+    :param name2: string; label name of the second plot
+    :param baseline: float; optionally, a baseline value is plotted.
+    :return:
+    """
 
     sns.set_style('darkgrid')
 
@@ -297,9 +305,6 @@ class VPPEnv(Env):
             mod.setObjective(obf)
 
             feasible = solve(mod)
-
-            # FIXME: remove
-            # mod.write(f'temp/model_{i}.lp')
 
             # If one of the timestep is not feasible, get out of the loop
             if not feasible:
