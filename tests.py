@@ -158,7 +158,8 @@ def train_rl_algo(ctxt=None,
                   mdp=False,
                   test_split=0.25,
                   num_epochs=1000,
-                  noise_std_dev=0.01):
+                  noise_std_dev=0.01,
+                  batch_size=100):
     """
 
     :param ctxt: garage.experiment.SnapshotConfig; the snapshot configuration used by Trainer to create the snapshotter.
@@ -167,6 +168,7 @@ def train_rl_algo(ctxt=None,
     :param test_split: float; float or list of int; fraction or indexes of the instances to be used for test.
     :param num_epochs: int; number of training epochs.
     :param noise_std_dev: float; standard deviation for the additive gaussian noise.
+    :param batch_size: int; batch size.
     :return:
     """
 
@@ -243,7 +245,7 @@ def train_rl_algo(ctxt=None,
                    optimizer_args=dict(learning_rate=0.01, ))
 
         trainer.setup(algo, env)
-        trainer.train(n_epochs=num_epochs, batch_size=100 * max_episode_length, plot=False)
+        trainer.train(n_epochs=num_epochs, batch_size=batch_size, plot=False)
 
 ########################################################################################################################
 
@@ -380,17 +382,25 @@ if __name__ == '__main__':
     plt.show()'''
 
     indexes = [2732, 9845, 3264, 4859, 9225, 7891, 4373, 5874, 6744, 3468]
-    i = 0
-    idx = indexes[i]
 
     for instance_idx in indexes:
         tf.compat.v1.disable_eager_execution()
         tf.compat.v1.reset_default_graph()
-        run = my_wrap_experiment(train_rl_algo, f'models/Dataset10k/single-step-env_{instance_idx}')
-        run(num_epochs=1)
+        run = my_wrap_experiment(train_rl_algo,
+                                 os.path.join('models',
+                                              'Dataset10k',
+                                              'checkpoint-2',
+                                              f'single-step-env_{instance_idx}'))
 
-    '''test_rl_algo(log_dir=os.path.join('models', 'Dataset10k', f'mdp-env_{i}'),
-                 loadpath=os.path.join('data', 'Dataset10k.csv'),
-                 test_split=[idx],
-                 num_episodes=200,
-                 mdp=True)'''
+        run(mdp=False,
+            test_split=[instance_idx],
+            num_epochs=100,
+            batch_size=1000,
+            noise_std_dev=0.01)
+
+    '''for idx in indexes:
+        test_rl_algo(log_dir=os.path.join('models', 'Dataset10k', 'checkpoint-1', f'single-step-env_{idx}'),
+                     loadpath=os.path.join('data', 'Dataset10k.csv'),
+                     test_split=[idx],
+                     num_episodes=1,
+                     mdp=False)'''
