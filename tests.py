@@ -361,27 +361,12 @@ def resume_experiment(ctxt, saved_dir):
 
 if __name__ == '__main__':
 
-    '''sns.set_style('darkgrid')
+    # Randomly choose 100 instances
+    np.random.seed(0)
+    indexes = np.arange(10000, dtype=np.int32)
+    indexes = np.random.choice(indexes, size=100)
 
-    instance_idx = 3
-    results = \
-        compute_real_cost_with_c_virt(virtual_costs='models/optPar333.npy',
-                                      instances_indexes=[instance_idx],
-                                      num_episodes=1,
-                                      noise_std_dev=0,
-                                      display=True)
-
-    visualization_df = results['dataframe']
-
-    axes = visualization_df.plot(subplots=True, fontsize=12, figsize=(10, 7))
-    plt.xlabel('Timestamp', fontsize=14)
-
-    for axis in axes:
-        axis.legend(loc=2, prop={'size': 12})
-    plt.plot()
-    plt.show()'''
-
-    indexes = [2732, 9845, 3264, 4859, 9225, 7891, 4373, 5874, 6744, 3468]
+    print(indexes)
 
     for instance_idx in indexes:
         tf.compat.v1.disable_eager_execution()
@@ -389,14 +374,17 @@ if __name__ == '__main__':
         run = my_wrap_experiment(train_rl_algo,
                                  os.path.join('models',
                                               'Dataset10k',
-                                              'checkpoint-2',
-                                              f'single-step-env_{instance_idx}'))
+                                              'checkpoint-3',
+                                              'hybrid-rl-opt',
+                                              f'mdp-env_{instance_idx}'))
 
-        run(mdp=False,
+        run(mdp=True,
             test_split=[instance_idx],
-            num_epochs=100,
-            batch_size=1000,
+            num_epochs=20,
+            batch_size=9600,
             noise_std_dev=0.01)
+
+    # resume_experiment(saved_dir='models/Dataset10k/tmp/single-step-env_2732')
 
     '''for idx in indexes:
         test_rl_algo(log_dir=os.path.join('models', 'Dataset10k', 'checkpoint-1', f'single-step-env_{idx}'),
