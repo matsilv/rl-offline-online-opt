@@ -1,4 +1,4 @@
-from rl_utils import VPPEnv, MarkovianVPPEnv, timestamps_headers
+from rl_utils import SingleStepVPPEnv, MarkovianVPPEnv, timestamps_headers
 from utility import my_wrap_experiment
 import OnlineHeuristic
 from tabulate import tabulate
@@ -199,23 +199,21 @@ def train_rl_algo(ctxt=None,
             # Create the environment
             env = MarkovianVPPEnv(predictions=train_predictions,
                                   shift=shift,
-                                  cGrid=cGrid,
+                                  c_grid=cGrid,
                                   noise_std_dev=noise_std_dev,
                                   savepath=None)
 
             # Garage wrapping of a gym environment
             env = GymEnv(env, max_episode_length=max_episode_length)
-
-            # Normalize observations
             env = NormalizedEnv(env, normalize_obs=True)
         else:
             max_episode_length = 1
             discount = 0
 
             # Create the environment
-            env = VPPEnv(predictions=train_predictions,
+            env = SingleStepVPPEnv(predictions=train_predictions,
                          shift=shift,
-                         cGrid=cGrid,
+                         c_grid=cGrid,
                          noise_std_dev=noise_std_dev,
                          savepath=None)
 
@@ -286,11 +284,11 @@ def test_rl_algo(log_dir, loadpath, test_split, mdp=False, num_episodes=100):
 
         # Create the environment
         if not mdp:
-            env = VPPEnv(predictions=train_predictions,
-                         shift=shift,
-                         cGrid=cGrid,
-                         noise_std_dev=0,
-                         savepath=None)
+            env = SingleStepVPPEnv(predictions=train_predictions,
+                                   shift=shift,
+                                   cGrid=cGrid,
+                                   noise_std_dev=0,
+                                   savepath=None)
             env = GymEnv(env)
         else:
             env = MarkovianVPPEnv(predictions=train_predictions,
@@ -299,7 +297,7 @@ def test_rl_algo(log_dir, loadpath, test_split, mdp=False, num_episodes=100):
                                   noise_std_dev=0,
                                   savepath=None)
             env = GymEnv(env)
-            env = NormalizedEnv(env, normalize_obs=True)
+            # env = NormalizedEnv(env, normalize_obs=True)
 
         policy = algo.policy
 
@@ -361,10 +359,18 @@ def resume_experiment(ctxt, saved_dir):
 
 if __name__ == '__main__':
 
+    # plot_pv_and_load_forecasts(loadpath='data/Dataset10k.csv')
+
     # Randomly choose 100 instances
     np.random.seed(0)
     indexes = np.arange(10000, dtype=np.int32)
     indexes = np.random.choice(indexes, size=100)
+
+    # plot_solutions(indexes=indexes, solutions_filepath='models/Dataset10k/checkpoint-3/')
+
+    '''cost_over_time(indexes=indexes,
+                   durations_filepath='results/dataset10k/training-duration/',
+                   models_filepath='models/Dataset10k/checkpoint-3/')'''
 
     print(indexes)
 
@@ -374,9 +380,9 @@ if __name__ == '__main__':
         run = my_wrap_experiment(train_rl_algo,
                                  os.path.join('models',
                                               'Dataset10k',
-                                              'checkpoint-3',
+                                              'tmp',
                                               'hybrid-rl-opt',
-                                              f'mdp-env_{instance_idx}'))
+                                              f'tmp'))
 
         run(mdp=True,
             test_split=[instance_idx],
