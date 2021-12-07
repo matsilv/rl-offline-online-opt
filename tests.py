@@ -1,4 +1,4 @@
-from rl_utils import SingleStepVPPEnv, MarkovianVPPEnv, timestamps_headers
+from rl_utils import SingleStepVPPEnv, MarkovianVPPEnv, SingleStepFullRLVPP, MarkovianRlVPPEnv
 from utility import my_wrap_experiment
 import OnlineHeuristic
 from tabulate import tabulate
@@ -22,6 +22,7 @@ import random
 
 
 TIMESTEP_IN_A_DAY = 96
+METHODS = ['hybrid-single-step', 'hybrid-mdp', 'rl-single-step', 'rl-mdp']
 
 ########################################################################################################################
 
@@ -155,7 +156,7 @@ def check_markovian_env(num_episodes=100):
 
 
 def train_rl_algo(ctxt=None,
-                  mdp=False,
+                  method='rl-single-step',
                   test_split=0.25,
                   num_epochs=1000,
                   noise_std_dev=0.01,
@@ -164,7 +165,7 @@ def train_rl_algo(ctxt=None,
 
     :param ctxt: garage.experiment.SnapshotConfig; the snapshot configuration used by Trainer to create the snapshotter.
                                                    If None, it will create one with default settings.
-    :param mdp: boolean; True if you want to use the MDP version of the environment.
+    :param method: string; choose among one of the available methods.
     :param test_split: float; float or list of int; fraction or indexes of the instances to be used for test.
     :param num_epochs: int; number of training epochs.
     :param noise_std_dev: float; standard deviation for the additive gaussian noise.
@@ -173,6 +174,9 @@ def train_rl_algo(ctxt=None,
     """
 
     # set_seed(1)
+
+    assert method in METHODS, f"{method} is not valid"
+    print(f'Selected method: {method}')
 
     # A trainer provides a default TensorFlow session using python context
     with TFTrainer(snapshot_config=ctxt) as trainer:
@@ -192,7 +196,7 @@ def train_rl_algo(ctxt=None,
         else:
             raise Exception("test_split must be list of int or float")
 
-        if mdp:
+        if method == 'hybrid-mdp':
             max_episode_length = TIMESTEP_IN_A_DAY
             discount = 0.99
 
@@ -206,16 +210,41 @@ def train_rl_algo(ctxt=None,
             # Garage wrapping of a gym environment
             env = GymEnv(env, max_episode_length=max_episode_length)
             env = NormalizedEnv(env, normalize_obs=True)
-        else:
+        elif method == 'hybrid-single-step':
             max_episode_length = 1
             discount = 0
 
             # Create the environment
             env = SingleStepVPPEnv(predictions=train_predictions,
-                         shift=shift,
-                         c_grid=cGrid,
-                         noise_std_dev=noise_std_dev,
-                         savepath=None)
+                                   shift=shift,
+                                   c_grid=cGrid,
+                                   noise_std_dev=noise_std_dev,
+                                   savepath=None)
+
+            # Garage wrapping of a gym environment
+            env = GymEnv(env, max_episode_length=max_episode_length)
+        elif method == 'rl-single-step':
+            max_episode_length = 1
+            discount = 0
+
+            # Create the environment
+            env = SingleStepFullRLVPP(predictions=train_predictions,
+                                      shift=shift,
+                                      c_grid=cGrid,
+                                      noise_std_dev=noise_std_dev,
+                                      savepath=None)
+            # Garage wrapping of a gym environment
+            env = GymEnv(env, max_episode_length=max_episode_length)
+        elif method == 'rl-mdp':
+            max_episode_length = TIMESTEP_IN_A_DAY
+            discount = 0.99
+
+            # Create the environment
+            env = MarkovianRlVPPEnv(predictions=train_predictions,
+                                    shift=shift,
+                                    c_grid=cGrid,
+                                    noise_std_dev=noise_std_dev,
+                                    savepath=None)
 
             # Garage wrapping of a gym environment
             env = GymEnv(env, max_episode_length=max_episode_length)
@@ -384,10 +413,10 @@ if __name__ == '__main__':
                                               'hybrid-rl-opt',
                                               f'tmp'))
 
-        run(mdp=True,
+        run(method='rl-mdp',
             test_split=[instance_idx],
-            num_epochs=20,
-            batch_size=9600,
+            num_epochs=1000,
+            batch_size=100,
             noise_std_dev=0.01)
 
     # resume_experiment(saved_dir='models/Dataset10k/tmp/single-step-env_2732')
