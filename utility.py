@@ -1,5 +1,9 @@
 # Author: Mattia Silvestri
 
+"""
+    Utility methods.
+"""
+
 from datetime import datetime, timedelta
 import numpy as np
 from garage.experiment.experiment import ExperimentTemplate

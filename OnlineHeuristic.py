@@ -26,51 +26,7 @@ p_diesel_max = 1200
 ########################################################################################################################
 
 
-def min_max_scaler(starting_range, new_range, value):
-    """
-    Scale the input value in the
-    :param starting_range: tuple of float; the starting range.
-    :param new_range: tuple of float; the new range.
-    :param value: float; value to be rescaled.
-    :return:
-    """
-
-    assert isinstance(starting_range, tuple) and len(starting_range) == 2, \
-        "feature_range must be a tuple as (min, max)"
-    assert isinstance(new_range, tuple) and len(new_range) == 2, \
-        "feature_range must be a tuple as (min, max)"
-
-    min_start_value = starting_range[0]
-    max_start_value = starting_range[1]
-    min_new_value = new_range[0]
-    max_new_value = new_range[1]
-
-    value_std = (value - min_start_value) / (max_start_value - min_start_value)
-    scaled_value = value_std * (max_new_value - min_new_value) + min_new_value
-
-    return scaled_value
-
-########################################################################################################################
-
-def timestamps_headers(num_timeunits):
-    """
-    Given a number of timeunits (in minutes), it provides a string representation of each timeunit.
-    For example, if num_timeunits=96, the result is [00:00, 00:15, 00:30, ...].
-    :param num_timeunits: int; the number of timeunits in a day.
-    :return: list of string; list of timeunits.
-    """
-
-    start_time = datetime.strptime('00:00', '%H:%M')
-    timeunit = 24 * 60 / num_timeunits
-    timestamps = [start_time + idx * timedelta(minutes=timeunit) for idx in range(num_timeunits)]
-    timestamps = ['{:02d}:{:02d}'.format(timestamp.hour, timestamp.minute) for timestamp in timestamps]
-
-    return timestamps
-
-########################################################################################################################
-
-
-# Optimize VPP planning Model
+# Solve VPP optimization model
 def solve(mod):
     """
     Solve an optimization model.
@@ -100,27 +56,28 @@ def solve(mod):
 ########################################################################################################################
 
 
-# greedy heuristic
-def heur(mr=None,
+def heur(prices_filename,
+         mr=None,
          instances_filename=None,
-         pRenPV=None,
+         p_ren_pv=None,
          tot_cons=None,
          display=False,
          virtual_costs=None):
     """
-    Implementation of a simple heuristic. You can load the instances from file and specify the index of the one you
-    want to solve or give the instance itself as input.
+    Implementation of a simple greedy heuristic. You can load the instances from file and specify the index of the one
+    you want to solve or give the instance itself as input.
+    :param prices_filename: string; the filepath where the prices are loaded from.
     :param mr: int; index of the instance to be solved.
     :param instances_filename: string; the name of the file from which instances are loaded.
-    :param pRenPV: numpy.array of shape (n_instances, 96); photovoltaic production at each timestep.
+    :param p_ren_pv: numpy.array of shape (n_instances, 96); photovoltaic production at each timestep.
     :param tot_cons: numpy.array of shape (n_instances, 96); electricity demand at each timestep.
     :param display: bool; if True, the solutions is printed to the output.
-    :param virtual_costs_filename: string; the name of the file from which the virtual costs are loaded.
+    :param virtual_costs: np.array; an array with the virtual costs.
     :return: float, list of float, float; final solution cost, list of costs for each timestep and real cost;
                                           None, None and None if the instance can not be solved.
     """
 
-    assert (mr is not None and instances_filename is not None) or (pRenPV is not None and tot_cons is not None), \
+    assert (mr is not None and instances_filename is not None) or (p_ren_pv is not None and tot_cons is not None), \
         "You must specify either the filename from which instances are loaded and the instance index " + \
         "or the instance itself"
     
@@ -128,12 +85,13 @@ def heur(mr=None,
     n = 96
     
     # Price data from GME
-    cGrid = np.load('data/gmePrices.npy')
-    cGridS = np.mean(cGrid)
+    assert os.path.isfile(prices_filename), "Prices filename does not exist"
+    c_grid = np.load(prices_filename)
+    c_grid_s = np.mean(c_grid)
 
     # Set the virtual costs
     if virtual_costs is None:
-        c_virt = cGrid.copy()
+        c_virt = c_grid.copy()
     else:
         c_virt = virtual_costs.copy()
 

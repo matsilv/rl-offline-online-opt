@@ -1,5 +1,8 @@
 # Author: Mattia Silvestri
 
+"""
+    Methods to make plots and visualize results.
+"""
 
 import pandas as pd
 import numpy as np
