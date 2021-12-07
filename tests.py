@@ -18,7 +18,6 @@ from garage import wrap_experiment
 import tensorflow as tf
 import cloudpickle
 import os
-import random
 from utility import timestamps_headers, my_wrap_experiment
 
 ########################################################################################################################
@@ -30,20 +29,14 @@ METHODS = ['hybrid-single-step', 'hybrid-mdp', 'rl-single-step', 'rl-mdp']
 ########################################################################################################################
 
 
-def train_rl_algo(predictions_filepath,
-                  shifts_filepath,
-                  prices_filepath,
-                  method,
-                  ctxt=None,
+def train_rl_algo(ctxt=None,
+                  method=None,
                   test_split=0.25,
                   num_epochs=1000,
                   noise_std_dev=0.01,
                   batch_size=100):
     """
     Training routing.
-    :param predictions_filepath: string; where instances are loaded from.
-    :param shifts_filepath: string; where optimal shifts are loaded from.
-    :param prices_filepath: string; where prices are loaded from.
     :param ctxt: garage.experiment.SnapshotConfig; the snapshot configuration used by Trainer to create the snapshotter.
                                                    If None, one will be created with default settings.
     :param method: string; choose among one of the available methods.
@@ -55,6 +48,10 @@ def train_rl_algo(predictions_filepath,
     """
 
     # set_seed(1)
+    # FIXME: the filepath should not be hardcoded
+    predictions_filepath = os.path.join('data', 'Dataset10k.csv')
+    prices_filepath = os.path.join('data', 'gmePrices.npy')
+    shifts_filepath = os.path.join('data', 'optShift.npy')
 
     # Check that the selected method is valid
     assert method in METHODS, f"{method} is not valid"
@@ -64,9 +61,10 @@ def train_rl_algo(predictions_filepath,
     with TFTrainer(snapshot_config=ctxt) as trainer:
 
         # Load data from file
-        assert os.path.isfile(predictions_filepath), "Instances file does not exist"
-        assert os.path.isfile(shifts_filepath), "Shifts file does not exist"
-        assert os.path.isfile(prices_filepath), "Prices file does not exist"
+        # Check that all the required files exist
+        assert os.path.isfile(predictions_filepath), f"{predictions_filepath} does not exist"
+        assert os.path.isfile(prices_filepath), f"{prices_filepath} does not exist"
+        assert os.path.isfile(shifts_filepath), f"{shifts_filepath} does not exist"
         predictions = pd.read_csv(predictions_filepath)
         shift = np.load(shifts_filepath)
         c_grid = np.load(prices_filepath)
@@ -190,9 +188,10 @@ def test_rl_algo(log_dir,
         env = data['env']
 
         # Load data from file
-        assert os.path.isfile(predictions_filepath), "Instances file does not exist"
-        assert os.path.isfile(shifts_filepath), "Shifts file does not exist"
-        assert os.path.isfile(prices_filepath), "Prices file does not exist"
+        # Check that all the required files exist
+        assert os.path.isfile(predictions_filepath), f"{predictions_filepath} does not exist"
+        assert os.path.isfile(prices_filepath), f"{prices_filepath} does not exist"
+        assert os.path.isfile(shifts_filepath), f"{shifts_filepath} does not exist"
         predictions = pd.read_csv(predictions_filepath)
         shift = np.load(shifts_filepath)
         c_grid = np.load(prices_filepath)
@@ -315,6 +314,10 @@ def resume_experiment(ctxt, saved_dir):
 
 if __name__ == '__main__':
 
+    # NOTE: you should set the logging directory and the method
+    LOG_DIR = os.path.join('models', 'Dataset10k', 'tmp', 'tmp')
+    METHOD = 'hybrid-single-step'
+
     # Randomly choose 100 instances
     np.random.seed(0)
     indexes = np.arange(10000, dtype=np.int32)
@@ -327,13 +330,9 @@ if __name__ == '__main__':
         tf.compat.v1.disable_eager_execution()
         tf.compat.v1.reset_default_graph()
         run = my_wrap_experiment(train_rl_algo,
-                                 os.path.join('models',
-                                              'Dataset10k',
-                                              'tmp',
-                                              'hybrid-rl-opt',
-                                              f'tmp'))
+                                 logging_dir=LOG_DIR)
 
-        run(method='rl-mdp',
+        run(method=METHOD,
             test_split=[instance_idx],
             num_epochs=1000,
             batch_size=100,
@@ -341,11 +340,7 @@ if __name__ == '__main__':
 
     # Test trained methods
     for idx in indexes:
-        test_rl_algo(log_dir=os.path.join('models',
-                                          'Dataset10k',
-                                          'checkpoint-3',
-                                          'pure-rl',
-                                          f'mdp-env_{idx}'),
+        test_rl_algo(log_dir=LOG_DIR,
                      predictions_filepath=os.path.join('data', 'Dataset10k.csv'),
                      shifts_filepath=os.path.join('data', 'optShift.npy'),
                      prices_filepath=os.path.join('data', 'gmePrices.npy'),

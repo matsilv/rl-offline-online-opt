@@ -9,7 +9,7 @@ from gym.spaces import Box
 import numpy as np
 import random
 from gurobipy import Model, GRB
-from OnlineHeuristic import solve
+from online_heuristic import solve
 from tabulate import tabulate
 from utility import instances_preprocessing, timestamps_headers, min_max_scaler
 from numpy.testing import assert_almost_equal
