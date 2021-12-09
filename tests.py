@@ -18,6 +18,7 @@ from garage import wrap_experiment
 import tensorflow as tf
 import cloudpickle
 import os
+import argparse
 from utility import timestamps_headers, my_wrap_experiment
 
 ########################################################################################################################
@@ -315,8 +316,24 @@ def resume_experiment(ctxt, saved_dir):
 if __name__ == '__main__':
 
     # NOTE: you should set the logging directory and the method
-    LOG_DIR = os.path.join('models', 'Dataset10k', 'tmp', 'tmp')
-    METHOD = 'hybrid-single-step'
+    parser = argparse.ArgumentParser()
+    parser.add_argument("logdir", type=str, help="Logging directory")
+    parser.add_argument("--method",
+                        type=str,
+                        choices=METHODS,
+                        help="'hybrid-single-step': this is referred to as 'single-step' in the paper;"
+                             + "'hybrid-mdp': this is referred to as 'mdp' in the paper;"
+                             + "'rl-single-step': end-to-end RL approach which directly provides the decision "
+                             + "variables for all the stages;"
+                             + "'rl-mdp': this is referred to as 'rl' in the paper.")
+    parser.add_argument("--epochs", type=int, help="Number of training epochs")
+    parser.add_argument("--batch-size", type=int, help="Batch size")
+    args = parser.parse_args()
+
+    LOG_DIR = args.logdir
+    METHOD = args.method
+    EPOCHS = args.epochs
+    BATCH_SIZE = args.batch_size
 
     # Randomly choose 100 instances
     np.random.seed(0)
@@ -334,8 +351,8 @@ if __name__ == '__main__':
 
         run(method=METHOD,
             test_split=[instance_idx],
-            num_epochs=1000,
-            batch_size=100,
+            num_epochs=EPOCHS,
+            batch_size=BATCH_SIZE,
             noise_std_dev=0.01)
 
     # Test trained methods
@@ -344,6 +361,6 @@ if __name__ == '__main__':
                      predictions_filepath=os.path.join('data', 'Dataset10k.csv'),
                      shifts_filepath=os.path.join('data', 'optShift.npy'),
                      prices_filepath=os.path.join('data', 'gmePrices.npy'),
-                     method='rl-mdp',
+                     method=METHOD,
                      test_split=[idx],
                      num_episodes=1)
