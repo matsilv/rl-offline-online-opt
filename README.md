@@ -22,6 +22,7 @@ Management via Reinforcement Learning** under review at CPAIOR-2022 conference.
 * `optShift.npy`: optimal day-ahead load demand shifts.
 
 ## Run the experiments
+Ubuntu 18.04.6 LTS and Python 3.7 and 3.8 are supported.
 The experiments can be run launching the `tests.py` script. The arguments are the following:
 * `logdir`: logging and model directory.
 * `--method`: you can choose among the following methods:
@@ -42,10 +43,12 @@ the `test_rl_algo` method. Please, be sure to have a `data` with the following f
 which have been described in the previous section.
 
 ## Issue
-Currently, there is an issue with the `garage` library. If the `test.py` script in launched in the 
+Currently, there is an issue with the `garage` library when running on Windows 10 OS. If the `test.py` script in launched in the 
 the same directory of the git repository then the following execption is raised
 `TypeError: CreateProcess() argument 8 must be str or None, not bytes`.
 Please, run the code in separate directory from the git repository. Sorry for the inconvenience.
 The experiments were run on Windows 10 OS.
+
+
             
 
