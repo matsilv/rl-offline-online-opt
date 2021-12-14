@@ -47,7 +47,6 @@ Currently, there is an issue with the `garage` library when running on Windows 1
 the same directory of the git repository then the following execption is raised
 `TypeError: CreateProcess() argument 8 must be str or None, not bytes`.
 Please, run the code in separate directory from the git repository. Sorry for the inconvenience.
-The experiments were run on Windows 10 OS.
 
 
             
