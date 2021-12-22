@@ -7,6 +7,7 @@
 from vpp_envs import SingleStepVPPEnv, MarkovianVPPEnv, SingleStepFullRLVPP, MarkovianRlVPPEnv
 import numpy as np
 import pandas as pd
+import garage
 from garage.tf.baselines import ContinuousMLPBaseline
 from garage.sampler import LocalSampler
 from garage.tf.algos import VPG
@@ -19,6 +20,7 @@ import tensorflow as tf
 import cloudpickle
 import os
 import argparse
+from typing import Union, List
 from utility import timestamps_headers, my_wrap_experiment
 
 ########################################################################################################################
@@ -30,12 +32,12 @@ METHODS = ['hybrid-single-step', 'hybrid-mdp', 'rl-single-step', 'rl-mdp']
 ########################################################################################################################
 
 
-def train_rl_algo(ctxt=None,
-                  method=None,
-                  test_split=0.25,
-                  num_epochs=1000,
-                  noise_std_dev=0.01,
-                  batch_size=100):
+def train_rl_algo(ctxt: garage.experiment.SnapshotConfig = None,
+                  method: str = None,
+                  test_split: Union[float, List[int]] = 0.25,
+                  num_epochs: int = 1000,
+                  noise_std_dev: Union[float, int] = 0.01,
+                  batch_size: int = 100):
     """
     Training routing.
     :param ctxt: garage.experiment.SnapshotConfig; the snapshot configuration used by Trainer to create the snapshotter.
@@ -159,13 +161,13 @@ def train_rl_algo(ctxt=None,
 ########################################################################################################################
 
 
-def test_rl_algo(log_dir,
-                 predictions_filepath,
-                 shifts_filepath,
-                 prices_filepath,
-                 method,
-                 test_split,
-                 num_episodes=100):
+def test_rl_algo(log_dir: str,
+                 predictions_filepath: str,
+                 shifts_filepath: str,
+                 prices_filepath: str,
+                 method: str,
+                 test_split: Union[float, List[int]],
+                 num_episodes: int = 100):
     """
     Test a trained agent.
     :param log_dir: string; path where training information are saved to.

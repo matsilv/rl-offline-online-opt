@@ -11,18 +11,19 @@ import matplotlib.pyplot as plt
 from matplotlib.ticker import FormatStrFormatter
 import itertools
 import os
+from typing import Union, List
 from utility import instances_preprocessing, timestamps_headers
 
 
 ########################################################################################################################
 
-def _read_solution(filename, iter_idx, all_solutions):
+def _read_solution(filename: str, iter_idx: int, all_solutions: np.array) -> np.array:
     """
     Utility function to read a solution.
     :param filename: string; where the solution is loaded from.
     :param iter_idx: int; index of the current iteration.
     :param all_solutions: numpy.array; array with all the solutions.
-    :return:
+    :return: np.array; updated list with all the solutions.
     """
     solution = pd.read_csv(filename, index_col=0)
 
@@ -39,11 +40,11 @@ def _read_solution(filename, iter_idx, all_solutions):
 ########################################################################################################################
 
 
-def _plot_mean_std_solution(dict_mean,
-                            dict_std,
-                            columns,
-                            max_values_df,
-                            min_values_df):
+def _plot_mean_std_solution(dict_mean: dict,
+                            dict_std: dict,
+                            columns: List[str],
+                            max_values_df: pd.DataFrame,
+                            min_values_df: pd.DataFrame):
     """
     Plot a mosaic with all the decision variables and for all the methods.
     :param dict_mean: dictionary of pandas.Dataframe; a dictionary where the keys are the methods name and the values
@@ -131,7 +132,7 @@ def _plot_mean_std_solution(dict_mean,
 ########################################################################################################################
 
 
-def cost_over_time(indexes, durations_filepath, models_filepath):
+def cost_over_time(indexes: np.array, durations_filepath: str, models_filepath: str):
     """
     Plot the normalized cost over time for hybrid rl/opt single step and MDP and the pure RL approach.
     :param indexes: np.array; instances indexes.
@@ -292,7 +293,7 @@ def cost_over_time(indexes, durations_filepath, models_filepath):
 ########################################################################################################################
 
 
-def plot_solutions(indexes, solutions_filepath):
+def plot_solutions(indexes: np.array, solutions_filepath: str):
     """
     Plot the decision variables trend over time for all the methods.
     :param indexes: numpy.array; the numpy array with the indexes.
@@ -463,7 +464,7 @@ def plot_solutions(indexes, solutions_filepath):
 ########################################################################################################################
 
 
-def plot_pv_and_load_forecasts(loadpath):
+def plot_pv_and_load_forecasts(loadpath: str):
     """
     Plot the photovoltaic and user laod demand forecasts.
     :param loadpath: string; where data are loaded from.
@@ -519,11 +520,11 @@ def plot_pv_and_load_forecasts(loadpath):
 ########################################################################################################################
 
 
-def compare_cost(filepath1,
-                 filepath2,
-                 name1,
-                 name2,
-                 baseline=None):
+def compare_cost(filepath1: str,
+                 filepath2: str,
+                 name1: str,
+                 name2: str,
+                 baseline: Union[float, int] = None):
     """
     Compare the average reward over episodes between results saved in the specified filepath.
     :param filepath1: string; first results path.

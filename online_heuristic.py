@@ -2,15 +2,18 @@
     Utility functions to invoke the greedy heuristic and evaluate the solutions.
 """
 
-from gurobipy import *
+import gurobipy
+from gurobipy import GRB
+from gurobipy import Model
 import numpy as np
 from numpy.testing import assert_almost_equal
 import pandas as pd
 from tabulate import tabulate
 import matplotlib.pyplot as plt
-from typing import Union
+from typing import Union, Tuple, List
 import warnings
 import argparse
+import os
 from utility import instances_preprocessing, timestamps_headers, min_max_scaler
 
 
@@ -25,7 +28,7 @@ p_diesel_max = 1200
 ########################################################################################################################
 
 
-def solve(mod):
+def solve(mod: gurobipy.Model) -> bool:
     """
     Solve an optimization model.
     :param mod: gurobipy.Model; the optimization model to be solved.
@@ -54,14 +57,14 @@ def solve(mod):
 ########################################################################################################################
 
 
-def heur(prices_filename,
-         shifts_filename,
-         instances_filename=None,
-         instance_idx=None,
-         p_ren_pv=None,
-         tot_cons=None,
-         display=False,
-         virtual_costs=None):
+def heur(prices_filename: str,
+         shifts_filename: str,
+         instances_filename: str = None,
+         instance_idx: int = None,
+         p_ren_pv: np.array = None,
+         tot_cons: np.array = None,
+         display: bool = False,
+         virtual_costs: np.array = None) -> Tuple[float, List[Union[int, float]]]:
     """
     Implementation of a simple greedy heuristic. You can load the instances from file and specify the index of the one
     you want to solve or give the instance itself as input.
@@ -263,12 +266,12 @@ def heur(prices_filename,
 ########################################################################################################################
 
 
-def solve_optimization_with_virtual_cost(n_timesteps,
-                                         c_grid,
-                                         shift,
-                                         tot_cons,
-                                         p_ren_pv,
-                                         cvirt):
+def solve_optimization_with_virtual_cost(n_timesteps: int,
+                                         c_grid: np.array,
+                                         shift: np.array,
+                                         tot_cons: np.array,
+                                         p_ren_pv: np.array,
+                                         cvirt: np.array) -> Tuple[dict, float, float]:
     """
     Solve the hybrid offline/online optimization problem with additional virtual cost associated to the storage.
     :param n_timesteps: int; the number of timesteps in a day.
@@ -277,7 +280,7 @@ def solve_optimization_with_virtual_cost(n_timesteps,
     :param tot_cons: numpy.array; the total consumption predictions.
     :param p_ren_pv: numpy.array; the photovoltaic predictions.
     :param cvirt: numpy.array; the virtual costs associated to the storage.
-    :return:
+    :return: dict, float, float; a dictionary with the decision variables, the real and virtual costs.
     """
 
     # Check that the virtual costs have length (n_timesteps, )
@@ -374,12 +377,12 @@ def solve_optimization_with_virtual_cost(n_timesteps,
 ########################################################################################################################
 
 
-def solve_optimization_with_decision_vars(decision_vars,
-                                          n_timesteps,
-                                          shift,
-                                          p_ren_pv,
-                                          tot_cons,
-                                          c_grid):
+def solve_optimization_with_decision_vars(decision_vars: np.array,
+                                          n_timesteps: int,
+                                          shift: np.array,
+                                          p_ren_pv: np.array,
+                                          tot_cons: np.array,
+                                          c_grid: np.array) -> Tuple[float, dict]:
     """
     Compute the cost of a complete solution fo the VPP problem.
     :param decision_vars: numpy.array of shape (n_timesteps * 4); the numpy array with the complete solution.

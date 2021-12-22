@@ -9,10 +9,12 @@ from gym.spaces import Box
 import numpy as np
 import random
 from gurobipy import Model, GRB
+import gurobipy
 from online_heuristic import solve
 from tabulate import tabulate
 from utility import instances_preprocessing, timestamps_headers, min_max_scaler
 from numpy.testing import assert_almost_equal
+from typing import Tuple, List, Union
 
 ########################################################################################################################
 
@@ -95,7 +97,7 @@ class VPPEnv(Env):
         noise = np.random.normal(0, self.noise_std_dev, self.n)
         self.tot_cons_real = self.tot_cons_pred + self.tot_cons_pred * noise
 
-    def step(self, action):
+    def step(self, action: np.array):
         """
         Step function of the Gym environment.
         :param action: numpy.array; agent's action.
@@ -103,7 +105,7 @@ class VPPEnv(Env):
         """
         raise NotImplementedError()
 
-    def reset(self):
+    def reset(self) -> np.array:
         """
         When we reset the environment we randomly choose another instance and we clear all the instance variables.
         :return: numpy.array; pv and load values for the current instance.
@@ -116,7 +118,7 @@ class VPPEnv(Env):
         self._create_instance_variables()
         return self._get_observations()
 
-    def render(self, mode='ascii'):
+    def render(self, mode: str = 'ascii'):
         """
         Simple rendering of the environment.
         :return:
@@ -173,7 +175,7 @@ class SingleStepVPPEnv(VPPEnv):
         self.observation_space = Box(low=0, high=np.inf, shape=(self.n * 2,), dtype=np.float32)
         self.action_space = Box(low=-np.inf, high=np.inf, shape=(self.n,), dtype=np.float32)
 
-    def _get_observations(self):
+    def _get_observations(self) -> np.array:
         """
         Return predicted pv and load values as a single array.
         :return: numpy.array; pv and load values for the current instance.
@@ -197,11 +199,12 @@ class SingleStepVPPEnv(VPPEnv):
         self.tot_cons_real = None
         self.mr = None
 
-    def _solve(self, c_virt):
+    def _solve(self, c_virt: np.array) -> Tuple[gurobipy.Model, bool]:
         """
         Solve the optimization model with the greedy heuristic.
         :param c_virt: numpy.array of shape (num_timesteps, ); the virtual costs multiplied to output storage variable.
-        :return: list of gurobipy.Model; a list with the solved optimization model.
+        :return: list of gurobipy.Model, bool; a list with the solved optimization model and True if the problem is
+                                               feasible, False otherwise.
         """
 
         # Check variables initialization
@@ -274,7 +277,7 @@ class SingleStepVPPEnv(VPPEnv):
 
         return models, feasible
 
-    def _compute_real_cost(self, models):
+    def _compute_real_cost(self, models: List[gurobipy.Model]) -> Union[float, int]:
         """
         Given a list of optimization models, one for each timestep, the method returns the real cost value.
         :param models: list of gurobipy.Model; a list with an optimization model for each timestep.
@@ -299,7 +302,7 @@ class SingleStepVPPEnv(VPPEnv):
 
         return cost
 
-    def step(self, action):
+    def step(self, action: np.array) -> Tuple[np.array, Union[float, int], bool, dict]:
         """
         This is a step performed in the environment: the virtual costs are set by the agent and then the total cost
         (the reward) is computed.
@@ -373,7 +376,7 @@ class MarkovianVPPEnv(VPPEnv):
         # Set the cumulative cost
         self.cumulative_cost = 0
 
-    def _get_observations(self):
+    def _get_observations(self) -> np.array:
         """
         Return predicted pv and load values, one-hot encoding of the timestep and the storage.
         :return: numpy.array; pv and load values for the current instance.
@@ -403,11 +406,12 @@ class MarkovianVPPEnv(VPPEnv):
         self.timestep = 0
         self.cumulative_cost = 0
 
-    def _solve(self, c_virt):
+    def _solve(self, c_virt: np.array) -> List[gurobipy.Model]:
         """
         Solve the optimization model with the greedy heuristic.
         :param c_virt: numpy.array of shape (num_timesteps, ); the virtual costs multiplied to output storage variable.
-        :return: list of gurobipy.Model; a list with the solved optimization model.
+        :return: list of gurobipy.Model, bool; a list with the solved optimization model and True if the model is
+                                               feasible, False otherwise.
         """
 
         # Check variables initialization
@@ -467,7 +471,7 @@ class MarkovianVPPEnv(VPPEnv):
 
         return mod, feasible
 
-    def _compute_real_cost(self, model):
+    def _compute_real_cost(self, model: gurobipy.Model) -> Union[float, int]:
         """
         Given a list of models, one for each timestep, the method returns the real cost value.
         :param model: gurobipy.Model; optimization model for the current timestep.
@@ -486,7 +490,7 @@ class MarkovianVPPEnv(VPPEnv):
 
         return cost
 
-    def step(self, action):
+    def step(self, action: np.array) -> Tuple[np.array, Union[float, int], bool, dict]:
         """
         This is a step performed in the environment: the virtual costs are set by the agent and then the total cost
         (the reward) is computed.
@@ -555,7 +559,7 @@ class SingleStepFullRLVPP(VPPEnv):
         self.observation_space = Box(low=0, high=np.inf, shape=(self.n * 2,), dtype=np.float64)
         self.action_space = Box(low=-1, high=1, shape=(self.n * 4, ), dtype=np.float64)
 
-    def _get_observations(self):
+    def _get_observations(self) -> np.array:
         """
         Return predicted pv and load values as a single array.
         :return: numpy.array; pv and load values for the current instance.
@@ -579,7 +583,7 @@ class SingleStepFullRLVPP(VPPEnv):
         self.tot_cons_real = None
         self.mr = None
 
-    def _solve(self, action):
+    def _solve(self, action: np.array) -> List[gurobipy.Model]:
         """
         Solve the optimization model with the greedy heuristic.
         :param action: numpy.array of shape (num_timesteps, 4); the decision variables for each timestep.
@@ -667,7 +671,7 @@ class SingleStepFullRLVPP(VPPEnv):
 
         return feasible, cost
 
-    def step(self, action):
+    def step(self, action: np.array) -> Tuple[np.array, Union[float, int], bool, dict]:
         """
         This is a step performed in the environment: the virtual costs are set by the agent and then the total cost
         (the reward) is computed.
@@ -737,7 +741,7 @@ class MarkovianRlVPPEnv(VPPEnv):
         # Set the cumulative cost
         self.cumulative_cost = 0
 
-    def _get_observations(self):
+    def _get_observations(self) -> np.array:
         """
         Return predicted pv and load values as a single array.
         :return: numpy.array; pv and load values for the current instance.
@@ -775,11 +779,11 @@ class MarkovianRlVPPEnv(VPPEnv):
         self.output_storage = []
         self.storage_capacity = []
 
-    def _solve(self, action):
+    def _solve(self, action: np.array) -> Tuple[bool, Union[int, float]]:
         """
         Solve the optimization model with the greedy heuristic.
         :param action: numpy.array of shape (4, ); the decision variables for each timestep.
-        :return: list of gurobipy.Model; a list with the solved optimization model.
+        :return: bool, float; True if the model is feasible, False otherwise and a list of cost for each timestep.
         """
 
         # Check variables initialization
@@ -845,7 +849,7 @@ class MarkovianRlVPPEnv(VPPEnv):
 
         return feasible, cost
 
-    def step(self, action):
+    def step(self, action: np.array) -> Tuple[np.array, Union[float, int], bool, dict]:
         """
         This is a step performed in the environment: the virtual costs are set by the agent and then the total cost
         (the reward) is computed.
