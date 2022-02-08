@@ -1,0 +1,215 @@
+# Author: Mattia Silvestri
+
+"""
+    RL agents.
+"""
+
+import numpy as np
+
+from rl.utility import calc_qvals
+from utility import timestamps_headers
+from gym.spaces.discrete import Discrete
+from gym.spaces.box import Box
+from tensorflow.keras.models import load_model
+from tabulate import tabulate
+
+########################################################################################################################
+
+
+class DRLAgent:
+    """
+    Abstract class for Deep Reinforcement Learning agent.
+    """
+
+    def __init__(self, env, policy, model):
+        """
+
+        :param env: gym.Environment; the agent interacts with this environment.
+        :param policy: policy.Policy; policy defined as a probability distribution of actions over states.
+        :param model: model.DRLModel; DRL model.
+        """
+
+        self._env = env
+        self._policy = policy
+        self._model = model
+
+    def _step(self, action):
+        """
+        Private method to ensure environment input action is given in the proper format to Gym.
+        :param action: numpy.array; the action.
+        :return:
+        """
+        if isinstance(self._env.action_space, Discrete):
+            assert action.shape == (self._env.action_space.n,)
+            assert np.sum(action) == 1
+
+            action = np.argmax(action)
+            return self._env.step(action)
+        elif isinstance(self._env.action_space, Box):
+            assert action.shape == self._env.action_space.shape
+
+            return self._env.step(action)
+
+    def train(self, num_steps, render, gamma, batch_size, filename):
+        """
+        Training loop.
+        :param num_steps: int; number of interactions with the environment for training.
+        :param render: bool; True if you want to render the environment while training.
+        :param gamma: float; discount factor.
+        :param batch_size: int; batch size.
+        :param filename: string; file path where to save/load model weights.
+        :return:
+        """
+
+        raise NotImplementedError()
+
+    def test(self, loadpath, render, num_episodes=1):
+        """
+        Test the model.
+        :param loadpath: string; model weights loadpath.
+        :param render: bool; True if you want to visualize the environment, False otherwise.
+        :param num_episodes: int; the number of episodes.
+        :return:
+        """
+
+        # Load model
+        self._model = load_model(loadpath)
+
+        # Loop over the number of episodes
+        for _ in range(num_episodes):
+
+            # Initialize the environment
+            game_over = False
+            s_t = self._env.reset()
+            score = 0
+
+            # Perform an episode
+            while not game_over:
+
+                # Render if required
+                if render:
+                    self._env.render()
+
+                # Sample an action from policy
+                probs = self._model(np.expand_dims(s_t, axis=0))
+                a_t = self._policy.select_action(probs)
+
+                # Perform a step
+                s_tp1, r_t, game_over, _ = self._step(a_t)
+                s_t = s_tp1
+                score += r_t
+
+            print('Score: {}'.format(score))
+
+########################################################################################################################
+
+
+class OnPolicyAgent(DRLAgent):
+    """
+    DRL agent which requires on-policy samples.
+    """
+
+    def __init__(self, env, policy, model):
+        """
+
+        :param env: environment on which to train the agent; as Gym environment
+        :param policy: policy defined as a probability distribution of actions over states; as policy.Policy
+        :param model: DRL model; as models.DRLModel
+        """
+
+        super(OnPolicyAgent, self).__init__(env, policy, model)
+
+    def train(self, num_steps, render, gamma, batch_size, filename):
+        """
+        Training loop.
+        :param num_steps: int; training steps in the environment.
+        :param render: bool; True if you want to render the environment while training.
+        :param gamma: float; discount factor.
+        :param batch_size: int; batch size.
+        :param filename: string; file path where model weights will be saved.
+        :return:
+        """
+
+        # Training steps
+        steps = 0
+
+        # Sampled trajectory variables
+        actions = list()
+        states = list()
+        q_vals = list()
+
+        score = 0
+        num_episodes = 0
+
+        while steps < num_steps:
+
+            # Initialize the environment
+            game_over = False
+            s_t = self._env.reset()
+
+            current_states = list()
+            current_actions = list()
+            current_rewards = list()
+
+            num_episodes += 1
+
+            # Perform an episode
+            while not game_over:
+
+                # Render the environment if required
+                if render:
+                    self._env.render()
+
+                # Sample an action from policy
+                probs = self._model(np.expand_dims(s_t, axis=0))
+                action = self._policy.select_action(probs)
+                current_actions.append(action)
+
+                # Sample current state, next state and reward
+                current_states.append(s_t)
+                s_tp1, r_t, game_over, _ = self._step(action)
+                current_rewards.append(r_t)
+                s_t = s_tp1
+
+                # Increase the score and the steps counter
+                score += r_t
+                steps += 1
+
+            # Compute the Q-values
+            current_q_vals = calc_qvals(current_rewards, gamma=gamma)
+
+            # Keep track of trajectories
+            states = states + current_states
+            actions = actions + current_actions
+            q_vals = q_vals + current_q_vals
+
+            # Training step
+            if len(states) > batch_size:
+                states = np.asarray(states)[:batch_size]
+                q_vals = np.asarray(q_vals)[:batch_size]
+                actions = np.asarray(actions)[:batch_size]
+
+                # Perform a gradient descent step
+                loss = self._model.train_step(states, q_vals, actions)
+
+                print_string = 'Frame: {}/{} | Total reward: {:.2f}'.format(steps, num_steps, score)
+                print_string += ' | Total number of episodes: {} | Average score: {:.2f}'.format(num_episodes,
+                                                                                                 score / num_episodes)
+                print_string += ' | Policy loss: {:.2f}\n'.format(loss)
+                print(print_string)
+                print('-'*len(print_string) + '\n')
+
+                # Clear sample trajectory variables
+                states = list()
+                actions = list()
+                q_vals = list()
+
+                # Reset score and number of episodes
+                score = 0
+                num_episodes = 0
+
+        # Save model
+        if filename is not None:
+            self._model.save(filename)
+
+########################################################################################################################

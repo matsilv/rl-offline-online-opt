@@ -7,18 +7,12 @@
 from vpp_envs import SingleStepVPPEnv, MarkovianVPPEnv, SingleStepFullRLVPP, MarkovianRlVPPEnv
 import numpy as np
 import pandas as pd
-from garage.tf.baselines import ContinuousMLPBaseline
-from garage.sampler import LocalSampler
-from garage.tf.algos import VPG
-from garage.tf.policies import GaussianMLPPolicy
-from garage.trainer import TFTrainer
-from garage.envs import GymEnv
-from garage.envs.normalized_env import NormalizedEnv
-from garage import wrap_experiment
-import tensorflow as tf
-import cloudpickle
 import os
-from utility import timestamps_headers, my_wrap_experiment
+import argparse
+from typing import Union, List
+from rl.policy import GaussianPolicy
+from rl.agent import OnPolicyAgent
+from rl.models import PolicyGradient
 
 ########################################################################################################################
 
@@ -29,16 +23,14 @@ METHODS = ['hybrid-single-step', 'hybrid-mdp', 'rl-single-step', 'rl-mdp']
 ########################################################################################################################
 
 
-def train_rl_algo(ctxt=None,
-                  method=None,
-                  test_split=0.25,
-                  num_epochs=1000,
-                  noise_std_dev=0.01,
-                  batch_size=100):
+def train_rl_algo(method: str = None,
+                  test_split: Union[float, List[int]] = 0.25,
+                  num_epochs: int = 1000,
+                  noise_std_dev: Union[float, int] = 0.01,
+                  batch_size: int = 100,
+                  filename: str = None):
     """
     Training routing.
-    :param ctxt: garage.experiment.SnapshotConfig; the snapshot configuration used by Trainer to create the snapshotter.
-                                                   If None, one will be created with default settings.
     :param method: string; choose among one of the available methods.
     :param test_split: float or list of int; fraction or indexes of the instances to be used for test.
     :param num_epochs: int; number of training epochs.
@@ -47,7 +39,6 @@ def train_rl_algo(ctxt=None,
     :return:
     """
 
-    # set_seed(1)
     # FIXME: the filepath should not be hardcoded
     predictions_filepath = os.path.join('data', 'Dataset10k.csv')
     prices_filepath = os.path.join('data', 'gmePrices.npy')
@@ -57,257 +48,75 @@ def train_rl_algo(ctxt=None,
     assert method in METHODS, f"{method} is not valid"
     print(f'Selected method: {method}')
 
-    # A trainer provides a default TensorFlow session using python context
-    with TFTrainer(snapshot_config=ctxt) as trainer:
+    # Load data from file
+    # Check that all the required files exist
+    assert os.path.isfile(predictions_filepath), f"{predictions_filepath} does not exist"
+    assert os.path.isfile(prices_filepath), f"{prices_filepath} does not exist"
+    assert os.path.isfile(shifts_filepath), f"{shifts_filepath} does not exist"
+    predictions = pd.read_csv(predictions_filepath)
+    shift = np.load(shifts_filepath)
+    c_grid = np.load(prices_filepath)
 
-        # Load data from file
-        # Check that all the required files exist
-        assert os.path.isfile(predictions_filepath), f"{predictions_filepath} does not exist"
-        assert os.path.isfile(prices_filepath), f"{prices_filepath} does not exist"
-        assert os.path.isfile(shifts_filepath), f"{shifts_filepath} does not exist"
-        predictions = pd.read_csv(predictions_filepath)
-        shift = np.load(shifts_filepath)
-        c_grid = np.load(prices_filepath)
+    # Split between training and test
+    if isinstance(test_split, float):
+        split_index = int(len(predictions) * (1 - test_split))
+        train_predictions = predictions[:split_index]
+    elif isinstance(test_split, list):
+        split_index = test_split
+        train_predictions = predictions.iloc[split_index]
+    else:
+        raise Exception("test_split must be list of int or float")
 
-        # Split between training and test
-        if isinstance(test_split, float):
-            split_index = int(len(predictions) * (1 - test_split))
-            train_predictions = predictions[:split_index]
-        elif isinstance(test_split, list):
-            split_index = test_split
-            train_predictions = predictions.iloc[split_index]
-        else:
-            raise Exception("test_split must be list of int or float")
-
-        # Set episode length and discount factor for single-step and MDP version
-        if 'mdp' in method:
-            max_episode_length = TIMESTEP_IN_A_DAY
-            discount = 0.99
-        elif 'single-step' in method:
-            max_episode_length = 1
-            discount = 0
-        else:
-            raise Exception("Method name must contain 'mdp' or 'single-step'")
-
-        if method == 'hybrid-mdp':
-            # Create the environment
-            env = MarkovianVPPEnv(predictions=train_predictions,
+    if method == 'hybrid-mdp':
+        # Create the environment
+        env = MarkovianVPPEnv(predictions=train_predictions,
+                              shift=shift,
+                              c_grid=c_grid,
+                              noise_std_dev=noise_std_dev,
+                              savepath=None)
+    elif method == 'hybrid-single-step':
+        # Create the environment
+        env = SingleStepVPPEnv(predictions=train_predictions,
+                               shift=shift,
+                               c_grid=c_grid,
+                               noise_std_dev=noise_std_dev,
+                               savepath=None)
+    elif method == 'rl-single-step':
+        # Create the environment
+        env = SingleStepFullRLVPP(predictions=train_predictions,
                                   shift=shift,
                                   c_grid=c_grid,
                                   noise_std_dev=noise_std_dev,
                                   savepath=None)
+    elif method == 'rl-mdp':
+        # Create the environment
+        env = MarkovianRlVPPEnv(predictions=train_predictions,
+                                shift=shift,
+                                c_grid=c_grid,
+                                noise_std_dev=noise_std_dev,
+                                savepath=None)
 
-            # Garage wrapping of a gym environment
-            env = GymEnv(env, max_episode_length=max_episode_length)
-            env = NormalizedEnv(env, normalize_obs=True)
-        elif method == 'hybrid-single-step':
-            # Create the environment
-            env = SingleStepVPPEnv(predictions=train_predictions,
-                                   shift=shift,
-                                   c_grid=c_grid,
-                                   noise_std_dev=noise_std_dev,
-                                   savepath=None)
+    # Get the actions space
+    actions_space = env.action_space.shape
+    assert len(actions_space) == 1, "Only single dimension tuples are supported"
+    actions_space = actions_space[0]
 
-            # Garage wrapping of a gym environment
-            env = GymEnv(env, max_episode_length=max_episode_length)
-        elif method == 'rl-single-step':
-            # Create the environment
-            env = SingleStepFullRLVPP(predictions=train_predictions,
-                                      shift=shift,
-                                      c_grid=c_grid,
-                                      noise_std_dev=noise_std_dev,
-                                      savepath=None)
-            # Garage wrapping of a gym environment
-            env = GymEnv(env, max_episode_length=max_episode_length)
-        elif method == 'rl-mdp':
-            # Create the environment
-            env = MarkovianRlVPPEnv(predictions=train_predictions,
-                                    shift=shift,
-                                    c_grid=c_grid,
-                                    noise_std_dev=noise_std_dev,
-                                    savepath=None)
+    # Create and train the RL agent
+    model = PolicyGradient(input_shape=env.observation_space.shape,
+                           output_dim=actions_space,
+                           hidden_units=[16, 32, 64])
 
-            # Garage wrapping of a gym environment
-            env = GymEnv(env, max_episode_length=max_episode_length)
+    policy = GaussianPolicy(actions_space)
 
-        # A policy represented by a Gaussian distribution which is parameterized by a multilayer perceptron (MLP)
-        policy = GaussianMLPPolicy(env.spec)
-        obs, _ = env.reset()
+    agent = OnPolicyAgent(env, policy, model)
 
-        # A value function using a MLP network.
-        baseline = ContinuousMLPBaseline(env_spec=env.spec)
+    agent.train(num_steps=num_epochs * batch_size,
+                render=False,
+                gamma=0.99,
+                batch_size=batch_size,
+                filename=filename)
 
-        # It's called the "Local" sampler because it runs everything in the same process and thread as where
-        # it was called from.
-        sampler = LocalSampler(agents=policy,
-                               envs=env,
-                               max_episode_length=max_episode_length,
-                               is_tf_worker=True)
-
-        # Vanilla Policy Gradient
-        algo = VPG(env_spec=env.spec,
-                   baseline=baseline,
-                   policy=policy,
-                   sampler=sampler,
-                   discount=discount,
-                   optimizer_args=dict(learning_rate=0.01, ))
-
-        trainer.setup(algo, env)
-        trainer.train(n_epochs=num_epochs, batch_size=batch_size, plot=False)
-
-########################################################################################################################
-
-
-def test_rl_algo(log_dir,
-                 predictions_filepath,
-                 shifts_filepath,
-                 prices_filepath,
-                 method,
-                 test_split,
-                 num_episodes=100):
-    """
-    Test a trained agent.
-    :param log_dir: string; path where training information are saved to.
-    :param predictions_filepath: string; where instances are loaded from.
-    :param shifts_filepath: string; where optimal shifts are loaded from.
-    :param prices_filepath: string; where prices are loaded from.
-    :param method: string; choose among one of the available methods.
-    :param test_split: float or list of int; fraction of the instances or list of instances indexes.
-    :param num_episodes: int; number of episodes.
-    :return:
-    """
-
-    # Create TF1 session and load all the experiments data
-    tf.compat.v1.disable_eager_execution()
-    tf.compat.v1.reset_default_graph()
-    with tf.compat.v1.Session() as _:
-        # Load parameters
-        data = cloudpickle.load(open(os.path.join(log_dir, 'params.pkl'), 'rb'))
-        # Get the agent
-        algo = data['algo']
-        env = data['env']
-
-        # Load data from file
-        # Check that all the required files exist
-        assert os.path.isfile(predictions_filepath), f"{predictions_filepath} does not exist"
-        assert os.path.isfile(prices_filepath), f"{prices_filepath} does not exist"
-        assert os.path.isfile(shifts_filepath), f"{shifts_filepath} does not exist"
-        predictions = pd.read_csv(predictions_filepath)
-        shift = np.load(shifts_filepath)
-        c_grid = np.load(prices_filepath)
-
-        # Split between training and test
-        if isinstance(test_split, float):
-            split_index = int(len(predictions) * (1 - test_split))
-            train_predictions = predictions[:split_index]
-        elif isinstance(test_split, list):
-            split_index = test_split
-            train_predictions = predictions.iloc[split_index]
-        else:
-            raise Exception("test_split must be list of int or float")
-
-        # Set episode length and discount factor for single-step and MDP version
-        if 'mdp' in method:
-            max_episode_length = TIMESTEP_IN_A_DAY
-        elif 'single-step' in method:
-            max_episode_length = 1
-        else:
-            raise Exception("Method name must contain 'mdp' or 'single-step'")
-
-        if method == 'hybrid-mdp':
-            # Create the environment
-            env = MarkovianVPPEnv(predictions=train_predictions,
-                                  shift=shift,
-                                  c_grid=c_grid,
-                                  noise_std_dev=0,
-                                  savepath=None)
-
-            # Garage wrapping of a gym environment
-            env = GymEnv(env, max_episode_length=max_episode_length)
-            env = NormalizedEnv(env, normalize_obs=True)
-        elif method == 'hybrid-single-step':
-            # Create the environment
-            env = SingleStepVPPEnv(predictions=train_predictions,
-                                   shift=shift,
-                                   c_grid=c_grid,
-                                   noise_std_dev=0,
-                                   savepath=None)
-
-            # Garage wrapping of a gym environment
-            env = GymEnv(env, max_episode_length=max_episode_length)
-        elif method == 'rl-single-step':
-            # Create the environment
-            env = SingleStepFullRLVPP(predictions=train_predictions,
-                                      shift=shift,
-                                      c_grid=c_grid,
-                                      noise_std_dev=0,
-                                      savepath=None)
-            # Garage wrapping of a gym environment
-            env = GymEnv(env, max_episode_length=max_episode_length)
-        elif method == 'rl-mdp':
-            # Create the environment
-            env = MarkovianRlVPPEnv(predictions=train_predictions,
-                                    shift=shift,
-                                    c_grid=c_grid,
-                                    noise_std_dev=0,
-                                    savepath=None)
-
-            # Garage wrapping of a gym environment
-            env = GymEnv(env, max_episode_length=max_episode_length)
-
-        # Get the policy
-        policy = algo.policy
-
-        timestamps = timestamps_headers(env.n)
-        all_rewards = []
-
-        total_reward = 0
-
-        # Loop for each episode
-        for episode in range(num_episodes):
-            last_obs, _ = env.reset()
-            done = False
-
-            episode_reward = 0
-
-            all_actions = []
-
-            # Perform an episode
-            while not done:
-                # env.render(mode='ascii')
-                _, agent_info = policy.get_action(last_obs)
-                a = agent_info['mean']
-                all_actions.append(np.squeeze(a))
-
-                step = env.step(a)
-
-                total_reward -= step.reward
-                episode_reward -= step.reward
-
-                if step.terminal or step.timeout:
-                    break
-                last_obs = step.observation
-
-            print(f'\nTotal reward: {episode_reward}')
-            all_rewards.append(episode_reward)
-
-            if 'mdp' in method:
-                all_actions = np.expand_dims(all_actions, axis=0)
-
-########################################################################################################################
-
-
-@wrap_experiment
-def resume_experiment(ctxt, saved_dir):
-    """Resume a Tensorflow experiment.
-    Args:
-        ctxt (garage.experiment.ExperimentContext): The experiment
-            configuration used by Trainer to create the snapshotter.
-        saved_dir (str): Path where snapshots are saved.
-    """
-    with TFTrainer(snapshot_config=ctxt) as trainer:
-        trainer.restore(from_dir=saved_dir)
-        trainer.resume()
+    agent.test(loadpath=filename, render=True)
 
 ########################################################################################################################
 
@@ -315,8 +124,24 @@ def resume_experiment(ctxt, saved_dir):
 if __name__ == '__main__':
 
     # NOTE: you should set the logging directory and the method
-    LOG_DIR = os.path.join('models', 'Dataset10k', 'tmp', 'tmp')
-    METHOD = 'hybrid-single-step'
+    parser = argparse.ArgumentParser()
+    parser.add_argument("logdir", type=str, help="Logging directory")
+    parser.add_argument("--method",
+                        type=str,
+                        choices=METHODS,
+                        help="'hybrid-single-step': this is referred to as 'single-step' in the paper;"
+                             + "'hybrid-mdp': this is referred to as 'mdp' in the paper;"
+                             + "'rl-single-step': end-to-end RL approach which directly provides the decision "
+                             + "variables for all the stages;"
+                             + "'rl-mdp': this is referred to as 'rl' in the paper.")
+    parser.add_argument("--epochs", type=int, help="Number of training epochs")
+    parser.add_argument("--batch-size", type=int, help="Batch size")
+    args = parser.parse_args()
+
+    LOG_DIR = args.logdir
+    METHOD = args.method
+    EPOCHS = args.epochs
+    BATCH_SIZE = args.batch_size
 
     # Randomly choose 100 instances
     np.random.seed(0)
@@ -325,25 +150,17 @@ if __name__ == '__main__':
 
     print(indexes)
 
+    # Create the logging directory if does not exist
+    if not os.path.exists(LOG_DIR):
+        os.makedirs(LOG_DIR)
+
     # Training routing
     for instance_idx in indexes:
-        tf.compat.v1.disable_eager_execution()
-        tf.compat.v1.reset_default_graph()
-        run = my_wrap_experiment(train_rl_algo,
-                                 logging_dir=LOG_DIR)
-
-        run(method=METHOD,
-            test_split=[instance_idx],
-            num_epochs=1000,
-            batch_size=100,
-            noise_std_dev=0.01)
-
-    # Test trained methods
-    for idx in indexes:
-        test_rl_algo(log_dir=LOG_DIR,
-                     predictions_filepath=os.path.join('data', 'Dataset10k.csv'),
-                     shifts_filepath=os.path.join('data', 'optShift.npy'),
-                     prices_filepath=os.path.join('data', 'gmePrices.npy'),
-                     method='rl-mdp',
-                     test_split=[idx],
-                     num_episodes=1)
+        print(f'Instance index: {instance_idx}')
+        train_rl_algo(method=METHOD,
+                      test_split=[instance_idx],
+                      num_epochs=EPOCHS,
+                      batch_size=BATCH_SIZE,
+                      noise_std_dev=0.0,
+                      filename=os.path.join(LOG_DIR, str(instance_idx)))
+        print('-'*50 + '\n')
