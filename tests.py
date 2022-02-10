@@ -4,7 +4,7 @@
     Main methods to train and test the methods.
 """
 
-from vpp_envs import SingleStepVPPEnv, MarkovianVPPEnv, SingleStepFullRLVPP, MarkovianRlVPPEnv
+from vpp_envs import SingleStepVPPEnv, MarkovianVPPEnv, MarkovianRlVPPEnv
 import numpy as np
 import pandas as pd
 import os
@@ -161,6 +161,6 @@ if __name__ == '__main__':
                       test_split=[instance_idx],
                       num_epochs=EPOCHS,
                       batch_size=BATCH_SIZE,
-                      noise_std_dev=0.0,
+                      noise_std_dev=0.01,
                       filename=os.path.join(LOG_DIR, str(instance_idx)))
         print('-'*50 + '\n')

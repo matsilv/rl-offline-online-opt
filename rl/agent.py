@@ -6,12 +6,11 @@
 
 import numpy as np
 
-from rl.utility import calc_qvals
-from utility import timestamps_headers
+from rl.utility import calc_qvals, compute_advantage
 from gym.spaces.discrete import Discrete
 from gym.spaces.box import Box
+import tensorflow as tf
 from tensorflow.keras.models import load_model
-from tabulate import tabulate
 
 ########################################################################################################################
 
@@ -44,6 +43,7 @@ class DRLAgent:
             assert np.sum(action) == 1
 
             action = np.argmax(action)
+
             return self._env.step(action)
         elif isinstance(self._env.action_space, Box):
             assert action.shape == self._env.action_space.shape
@@ -91,6 +91,7 @@ class DRLAgent:
                     self._env.render()
 
                 # Sample an action from policy
+                # Add the batch dimension for the NN model
                 probs = self._model(np.expand_dims(s_t, axis=0))
                 a_t = self._policy.select_action(probs)
 
@@ -147,10 +148,12 @@ class OnPolicyAgent(DRLAgent):
             game_over = False
             s_t = self._env.reset()
 
+            # Reset current episode states, actions and rewards
             current_states = list()
             current_actions = list()
             current_rewards = list()
 
+            # Keep track of the episode number
             num_episodes += 1
 
             # Perform an episode
@@ -161,6 +164,7 @@ class OnPolicyAgent(DRLAgent):
                     self._env.render()
 
                 # Sample an action from policy
+                # Add the batch dimension for the NN model
                 probs = self._model(np.expand_dims(s_t, axis=0))
                 action = self._policy.select_action(probs)
                 current_actions.append(action)
@@ -176,30 +180,43 @@ class OnPolicyAgent(DRLAgent):
                 steps += 1
 
             # Compute the Q-values
-            current_q_vals = calc_qvals(current_rewards, gamma=gamma)
+            current_q_vals = calc_qvals(current_rewards,
+                                        gamma=gamma,
+                                        max_episode_length=self._env.max_episode_length)
 
             # Keep track of trajectories
             states = states + current_states
             actions = actions + current_actions
-            q_vals = q_vals + current_q_vals
+            q_vals.append(current_q_vals)
 
             # Training step
-            if len(states) > batch_size:
-                states = np.asarray(states)[:batch_size]
-                q_vals = np.asarray(q_vals)[:batch_size]
-                actions = np.asarray(actions)[:batch_size]
+            if len(states) >= batch_size:
+                # Convert trajectories from list to array
+                states = np.asarray(states)
+                actions = np.asarray(actions)
+                q_vals = np.asarray(q_vals)
+
+                # Compute the advantage
+                adv = compute_advantage(q_vals)
 
                 # Perform a gradient descent step
-                loss = self._model.train_step(states, q_vals, actions)
+                # Convert states, Q-values and advantage to tensor
+                states = tf.convert_to_tensor(states, dtype=tf.float32)
+                actions = tf.convert_to_tensor(actions, dtype=tf.float32)
+                adv = tf.convert_to_tensor(adv, dtype=tf.float32)
+                loss_dict = self._model.train_step(states, q_vals, adv, actions)
 
+                # Visualization
                 print_string = 'Frame: {}/{} | Total reward: {:.2f}'.format(steps, num_steps, score)
                 print_string += ' | Total number of episodes: {} | Average score: {:.2f}'.format(num_episodes,
                                                                                                  score / num_episodes)
-                print_string += ' | Policy loss: {:.2f}\n'.format(loss)
-                print(print_string)
+                for loss_name, loss_value in loss_dict.items():
+                    print_string += ' | {}: {:.5f} '.format(loss_name, loss_value)
+
+                print(print_string + '\n')
                 print('-'*len(print_string) + '\n')
 
-                # Clear sample trajectory variables
+                # Clear trajectory variables
                 states = list()
                 actions = list()
                 q_vals = list()

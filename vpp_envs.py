@@ -13,10 +13,12 @@ from online_heuristic import solve
 from tabulate import tabulate
 from utility import instances_preprocessing, timestamps_headers, min_max_scaler
 from numpy.testing import assert_almost_equal
+from abc import abstractmethod
 
 ########################################################################################################################
 
 MIN_REWARD = -10000
+TIMESTEP_IN_A_DAY = 96
 
 ########################################################################################################################
 
@@ -70,6 +72,11 @@ class VPPEnv(Env):
         self.savepath = savepath
 
         self._create_instance_variables()
+
+    @property
+    @abstractmethod
+    def max_episode_length(self):
+        raise NotImplementedError()
 
     def _create_instance_variables(self):
         """
@@ -172,6 +179,10 @@ class SingleStepVPPEnv(VPPEnv):
         # Here we define the observation and action spaces
         self.observation_space = Box(low=0, high=np.inf, shape=(self.n * 2,), dtype=np.float32)
         self.action_space = Box(low=-np.inf, high=np.inf, shape=(self.n,), dtype=np.float32)
+
+    @property
+    def max_episode_length(self):
+        return 1
 
     def _get_observations(self):
         """
@@ -356,6 +367,10 @@ class MarkovianVPPEnv(VPPEnv):
         # Here we define the observation and action spaces
         self.observation_space = Box(low=-np.inf, high=np.inf, shape=(self.n * 3 + 2,), dtype=np.float32)
         self.action_space = Box(low=-np.inf, high=np.inf, shape=(1,), dtype=np.float32)
+
+    @property
+    def max_episode_length(self):
+        return TIMESTEP_IN_A_DAY
 
     def _create_instance_variables(self):
         """
@@ -555,6 +570,10 @@ class SingleStepFullRLVPP(VPPEnv):
         self.observation_space = Box(low=0, high=np.inf, shape=(self.n * 2,), dtype=np.float64)
         self.action_space = Box(low=-1, high=1, shape=(self.n * 4, ), dtype=np.float64)
 
+    @property
+    def max_episode_length(self):
+        return 1
+
     def _get_observations(self):
         """
         Return predicted pv and load values as a single array.
@@ -720,6 +739,10 @@ class MarkovianRlVPPEnv(VPPEnv):
         # Here we define the observation and action spaces
         self.observation_space = Box(low=-np.inf, high=np.inf, shape=(self.n * 3 + 1,), dtype=np.float32)
         self.action_space = Box(low=-1, high=1, shape=(4,), dtype=np.float32)
+
+    @property
+    def max_episode_length(self):
+        return TIMESTEP_IN_A_DAY
 
     def _create_instance_variables(self):
         """
