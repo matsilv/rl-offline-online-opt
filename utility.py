@@ -22,7 +22,7 @@ def my_wrap_experiment(function,
                        snapshot_gap=1,
                        archive_launch_repo=True,
                        name_parameters=None,
-                       use_existing_dir=False,
+                       use_existing_dir=True,
                        x_axis='TotalEnvSteps'):
     """
     Custom wrapper for the ExperimentTemplate class of the garage library that allows to set the log directory.

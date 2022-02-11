@@ -28,6 +28,7 @@ from utility import timestamps_headers, my_wrap_experiment
 
 TIMESTEP_IN_A_DAY = 96
 METHODS = ['hybrid-single-step', 'hybrid-mdp', 'rl-single-step', 'rl-mdp']
+MODES = ['train', 'test']
 
 ########################################################################################################################
 
@@ -294,8 +295,17 @@ def test_rl_algo(log_dir: str,
             print(f'\nTotal reward: {episode_reward}')
             all_rewards.append(episode_reward)
 
-            if 'mdp' in method:
+            if method == 'rl-mdp':
                 all_actions = np.expand_dims(all_actions, axis=0)
+
+        if 'rl' in method:
+            action_save_name = 'solution'
+        else:
+            action_save_name = 'cvirt'
+
+        # Save the agent's actions
+        all_actions = np.squeeze(all_actions)
+        np.save(os.path.join(log_dir, action_save_name), all_actions)
 
 ########################################################################################################################
 
@@ -330,12 +340,22 @@ if __name__ == '__main__':
                              + "'rl-mdp': this is referred to as 'rl' in the paper.")
     parser.add_argument("--epochs", type=int, help="Number of training epochs")
     parser.add_argument("--batch-size", type=int, help="Batch size")
+    parser.add_argument("--mode",
+                        type=str,
+                        choices=MODES,
+                        required=True,
+                        help="'train': if you want to train a model from scratch;"
+                             + "'test': if you want to test an existing model.")
     args = parser.parse_args()
 
     LOG_DIR = args.logdir
     METHOD = args.method
-    EPOCHS = args.epochs
-    BATCH_SIZE = args.batch_size
+
+    mode = args.mode
+
+    if mode == 'train':
+        EPOCHS = args.epochs
+        BATCH_SIZE = args.batch_size
 
     # Randomly choose 100 instances
     np.random.seed(0)
@@ -344,25 +364,30 @@ if __name__ == '__main__':
 
     print(indexes)
 
-    # Training routing
-    for instance_idx in indexes:
-        tf.compat.v1.disable_eager_execution()
-        tf.compat.v1.reset_default_graph()
-        run = my_wrap_experiment(train_rl_algo,
-                                 logging_dir=LOG_DIR)
+    if mode == 'train':
+        # Training routing
+        for instance_idx in indexes:
+            tf.compat.v1.disable_eager_execution()
+            tf.compat.v1.reset_default_graph()
+            run = my_wrap_experiment(train_rl_algo,
+                                     logging_dir=LOG_DIR)
 
-        run(method=METHOD,
-            test_split=[instance_idx],
-            num_epochs=EPOCHS,
-            batch_size=BATCH_SIZE,
-            noise_std_dev=0.01)
+            run(method=METHOD,
+                test_split=[instance_idx],
+                num_epochs=EPOCHS,
+                batch_size=BATCH_SIZE,
+                noise_std_dev=0.01)
 
-    # Test trained methods
-    for idx in indexes:
-        test_rl_algo(log_dir=LOG_DIR,
-                     predictions_filepath=os.path.join('data', 'Dataset10k.csv'),
-                     shifts_filepath=os.path.join('data', 'optShift.npy'),
-                     prices_filepath=os.path.join('data', 'gmePrices.npy'),
-                     method=METHOD,
-                     test_split=[idx],
-                     num_episodes=1)
+    elif mode == 'test':
+        # Test trained methods
+        for idx in indexes:
+            test_rl_algo(log_dir=LOG_DIR,
+                         predictions_filepath=os.path.join('data', 'Dataset10k.csv'),
+                         shifts_filepath=os.path.join('data', 'optShift.npy'),
+                         prices_filepath=os.path.join('data', 'gmePrices.npy'),
+                         method=METHOD,
+                         test_split=[idx],
+                         num_episodes=1)
+
+    else:
+        raise Exception(f"{mode} is not supported".format(mode))
