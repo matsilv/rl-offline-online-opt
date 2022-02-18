@@ -368,6 +368,11 @@ class MarkovianVPPEnv(VPPEnv):
         self.observation_space = Box(low=-np.inf, high=np.inf, shape=(self.n * 3 + 2,), dtype=np.float32)
         self.action_space = Box(low=-np.inf, high=np.inf, shape=(1,), dtype=np.float32)
 
+        # Moving normalization coefficient
+        self._obs_alpha = 0.001
+        self._obs_mean = np.zeros(shape=self.observation_space.shape)
+        self._obs_std = np.ones(shape=self.observation_space.shape)
+
     @property
     def max_episode_length(self):
         return TIMESTEP_IN_A_DAY
@@ -401,6 +406,12 @@ class MarkovianVPPEnv(VPPEnv):
         observations = np.append(observations, self.storage)
         observations = np.append(observations, self.cumulative_cost)
         observations = np.squeeze(observations)
+
+        # Moving normalization
+        normalized_obs = (observations - self._obs_mean) / (self._obs_std + 1e-8)
+
+        self._obs_mean = (1 - self._obs_alpha) * self._obs_mean + self._obs_alpha * observations
+        self._obs_std = (1 - self._obs_alpha) * self._obs_std + self._obs_alpha * (observations - self._obs_mean)
 
         return observations
 
@@ -514,13 +525,15 @@ class MarkovianVPPEnv(VPPEnv):
         models, feasible = self._solve(action)
 
         if not feasible:
-            reward = MIN_REWARD
+            cost = MIN_REWARD
         else:
             # The reward is the negative real cost
-            reward = -self._compute_real_cost(models)
+            cost = -self._compute_real_cost(models)
+
+        reward = cost
 
         # Update the cumulative cost
-        self.cumulative_cost -= reward
+        self.cumulative_cost -= cost
 
         observations = self._get_observations()
 
@@ -530,8 +543,13 @@ class MarkovianVPPEnv(VPPEnv):
         # If we reach the end of the episode or the model is not feasible, we terminate the episode
         if self.timestep == self.n or not feasible:
             done = True
+            if feasible:
+                reward = -self.cumulative_cost
+            else:
+                reward = MIN_REWARD
         elif self.timestep < self.n:
             done = False
+            reward = 0
         else:
             raise Exception(f"Timestep cannot be greater than {self.n}")
 
@@ -868,6 +886,7 @@ class MarkovianRlVPPEnv(VPPEnv):
 
         return feasible, cost
 
+    # NOTE: here we provide a step-by-step reward rather than 0 expect for the last timestep as done in the paper
     def step(self, action):
         """
         This is a step performed in the environment: the virtual costs are set by the agent and then the total cost
@@ -889,10 +908,10 @@ class MarkovianRlVPPEnv(VPPEnv):
 
         if self.timestep == self.n or not feasible:
             done = True
-            if self.timestep == self.n:
-                reward = -self.cumulative_cost
-            else:
+            if not feasible:
                 reward = MIN_REWARD
+            else:
+                reward = -self.cumulative_cost
         elif self.timestep < self.n:
             done = False
             reward = 0

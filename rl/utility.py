@@ -17,7 +17,7 @@ def calc_qvals(rewards, gamma, max_episode_length):
     sum_r = 0.0
 
     for r in reversed(rewards):
-        sum_r += r * gamma
+        sum_r = r + gamma * sum_r
         res.append(sum_r)
 
     res = list(reversed(res))
@@ -33,7 +33,7 @@ def calc_qvals(rewards, gamma, max_episode_length):
 ########################################################################################################################
 
 
-def compute_advantage(q_vals):
+def compute_advantage(q_vals, baseline_vals):
     """
     # Compute the baseline as the mean expected cumulative rewards over the batch. This method assumes that the state is
     the only timestep (the second axis of the numpy array).
@@ -41,8 +41,7 @@ def compute_advantage(q_vals):
     :return: numpy.array of shape (batch_size * n_timesteps); the adantage for each action in the sampeld trajectories.
     """
 
-    baseline = np.nanmean(q_vals, axis=0, keepdims=True)
-    adv = q_vals - baseline
+    adv = q_vals - baseline_vals
     adv = adv.reshape(-1)
     adv = adv[~np.isnan(adv)]
 
@@ -69,7 +68,7 @@ def from_integer_to_categorical(select_action):
 ########################################################################################################################
 
 
-def from_tensor_to_numpy(train_step):
+def from_dict_of_tensor_to_numpy(train_step):
     """
     A decorator function to convert the action index to a one-hot encoding vector.
     :param select_action: function; the function to decorate.

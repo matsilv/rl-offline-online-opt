@@ -12,7 +12,8 @@ import argparse
 from typing import Union, List
 from rl.policy import GaussianPolicy
 from rl.agent import OnPolicyAgent
-from rl.models import PolicyGradient
+from rl.models import PolicyGradient, A2C
+from rl.baselines import SimpleBaseline, Critic
 
 ########################################################################################################################
 
@@ -102,13 +103,23 @@ def train_rl_algo(method: str = None,
     actions_space = actions_space[0]
 
     # Create and train the RL agent
-    model = PolicyGradient(input_shape=env.observation_space.shape,
+
+    baseline = Critic(input_shape=env.observation_space.shape,
+                      hidden_units=[32, 32])
+
+    # baseline = SimpleBaseline()
+    model = A2C(input_shape=env.observation_space.shape,
+                output_dim=actions_space,
+                critic=baseline,
+                hidden_units=[32, 32])
+
+    '''model = PolicyGradient(input_shape=env.observation_space.shape,
                            output_dim=actions_space,
-                           hidden_units=[16, 32, 64])
+                           hidden_units=[32, 32])'''
 
     policy = GaussianPolicy(actions_space)
 
-    agent = OnPolicyAgent(env, policy, model)
+    agent = OnPolicyAgent(env, policy, model, baseline, standardize_q_vals=True)
 
     agent.train(num_steps=num_epochs * batch_size,
                 render=False,
@@ -116,7 +127,7 @@ def train_rl_algo(method: str = None,
                 batch_size=batch_size,
                 filename=filename)
 
-    agent.test(loadpath=filename, render=True)
+    # agent.test(loadpath=filename, render=True)
 
 ########################################################################################################################
 

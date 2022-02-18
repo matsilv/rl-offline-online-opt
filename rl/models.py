@@ -9,7 +9,7 @@ from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import Dense, Input
 from tensorflow.keras.optimizers import Adam
 import tensorflow_probability as tfp
-from rl.utility import from_tensor_to_numpy
+from rl.utility import from_dict_of_tensor_to_numpy
 
 ########################################################################################################################
 
@@ -36,9 +36,9 @@ class DRLModel(tf.keras.Model):
         # Define common body
         self._model = Sequential()
         self._model.add(Input(input_shape))
-        self._model.add(Dense(units=hidden_units[0], activation='relu'))
+        self._model.add(Dense(units=hidden_units[0], activation='tanh'))
         for units in hidden_units[1:]:
-            self._model.add(Dense(units=units, activation='relu'))
+            self._model.add(Dense(units=units, activation='tanh'))
 
         # Create the actor
         self._actor_mean = Dense(output_dim)
@@ -69,7 +69,7 @@ class DRLModel(tf.keras.Model):
 
         return mean, std_dev
 
-    @from_tensor_to_numpy
+    @from_dict_of_tensor_to_numpy
     @tf.function
     def train_step(self, *args, **kwargs):
         """
@@ -88,7 +88,7 @@ class PolicyGradient(DRLModel):
     def __init__(self, input_shape, output_dim, hidden_units=[32, 32]):
         super(PolicyGradient, self).__init__(input_shape, output_dim, hidden_units)
 
-    @from_tensor_to_numpy
+    @from_dict_of_tensor_to_numpy
     #@tf.function
     def train_step(self, states, q_vals, adv, actions):
         """
@@ -103,10 +103,9 @@ class PolicyGradient(DRLModel):
         # Tape the gradient during forward step and loss computation
         with tf.GradientTape() as policy_tape:
             logits = self.call(inputs=states)
-            gaussian = tfp.distributions.Normal(loc=logits[0], scale=logits[1])
+            gaussian = tfp.distributions.MultivariateNormalDiag(loc=logits[0], scale_diag=logits[1])
             log_prob = gaussian.log_prob(actions)
-            neg_log_prob = -tf.reduce_sum(log_prob, axis=1)
-            policy_loss = tf.reduce_mean(tf.multiply(neg_log_prob, adv))
+            policy_loss = tf.reduce_mean(tf.multiply(-log_prob, adv))
 
         # Perform un update step
         for watched_var, trained_var in zip(policy_tape.watched_variables(), self._actor_trainable_vars):
@@ -119,4 +118,45 @@ class PolicyGradient(DRLModel):
 ########################################################################################################################
 
 
+# FIXME: we must ensure the baseline used to compute the advantage is the same of the A2C instance
+class A2C(DRLModel):
+    """
+        Definition of Advantage Actor-Critic RL algorithm.
+    """
 
+    def __init__(self, input_shape, output_dim, critic, hidden_units=[32, 32]):
+        super(A2C, self).__init__(input_shape, output_dim, hidden_units)
+
+        self._critic = critic
+
+    @from_dict_of_tensor_to_numpy
+    #@tf.function
+    def train_step(self, states, q_vals, adv, actions):
+        """
+        Compute loss and gradients. Perform a training step.
+        :param states: numpy.array; states of sampled trajectories.
+        :param q_vals: list of float; expected return computed with Monte Carlo sampling.
+        :param adv: numpy.array; the advantage for each action in the sampled trajectories.
+        :param actions: numpy.array; actions of sampled trajectories.
+        :return: loss: float; policy loss value.
+        """
+
+        # Tape the gradient during forward step and loss computation
+        with tf.GradientTape() as policy_tape:
+            logits = self.call(inputs=states)
+            gaussian = tfp.distributions.MultivariateNormalDiag(loc=logits[0], scale_diag=logits[1])
+            log_prob = gaussian.log_prob(actions)
+            policy_loss = tf.reduce_mean(tf.multiply(-log_prob, adv))
+
+        # Perform policy update step
+        for watched_var, trained_var in zip(policy_tape.watched_variables(), self._actor_trainable_vars):
+            assert watched_var.ref() == trained_var.ref()
+        dloss_policy = policy_tape.gradient(policy_loss, self._actor_trainable_vars)
+        self._policy_optimizer.apply_gradients(zip(dloss_policy, self._actor_trainable_vars))
+
+        # Perform critic update step
+        critic_loss = self._critic.train_step(states, tf.reshape(q_vals, shape=[-1, 1]))
+
+        return {'Policy loss': policy_loss, 'Critic loss': critic_loss}
+
+########################################################################################################################

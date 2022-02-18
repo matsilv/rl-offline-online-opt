@@ -6,7 +6,7 @@
 
 import numpy as np
 
-from rl.utility import calc_qvals, compute_advantage
+from rl.utility import calc_qvals
 from gym.spaces.discrete import Discrete
 from gym.spaces.box import Box
 import tensorflow as tf
@@ -20,17 +20,20 @@ class DRLAgent:
     Abstract class for Deep Reinforcement Learning agent.
     """
 
-    def __init__(self, env, policy, model):
+    def __init__(self, env, policy, model, baseline, standardize_q_vals):
         """
 
         :param env: gym.Environment; the agent interacts with this environment.
         :param policy: policy.Policy; policy defined as a probability distribution of actions over states.
         :param model: model.DRLModel; DRL model.
+        :param baseline: baselines.Baseline; baseline used to reduce the variance of the Q-values.
         """
 
         self._env = env
         self._policy = policy
         self._model = model
+        self._baseline = baseline
+        self._standardize_q_vals = standardize_q_vals
 
     def _step(self, action):
         """
@@ -110,15 +113,16 @@ class OnPolicyAgent(DRLAgent):
     DRL agent which requires on-policy samples.
     """
 
-    def __init__(self, env, policy, model):
+    def __init__(self, env, policy, model, baseline, standardize_q_vals):
         """
 
         :param env: environment on which to train the agent; as Gym environment
         :param policy: policy defined as a probability distribution of actions over states; as policy.Policy
         :param model: DRL model; as models.DRLModel
+        :param baseline: baselines.Baseline; baseline used to reduce the variance of the Q-values.
         """
 
-        super(OnPolicyAgent, self).__init__(env, policy, model)
+        super(OnPolicyAgent, self).__init__(env, policy, model, baseline, standardize_q_vals)
 
     def train(self, num_steps, render, gamma, batch_size, filename):
         """
@@ -196,14 +200,20 @@ class OnPolicyAgent(DRLAgent):
                 actions = np.asarray(actions)
                 q_vals = np.asarray(q_vals)
 
-                # Compute the advantage
-                adv = compute_advantage(q_vals)
+                if self._standardize_q_vals:
+                    mean = np.nanmean(q_vals, axis=0)
+                    std = np.nanstd(q_vals, axis=0)
+                    q_vals = (q_vals - mean) / (std + 1e-5)
+
+                # Compute advatange
+                adv = self._baseline.compute_advantage(states, q_vals)
 
                 # Perform a gradient descent step
                 # Convert states, Q-values and advantage to tensor
                 states = tf.convert_to_tensor(states, dtype=tf.float32)
                 actions = tf.convert_to_tensor(actions, dtype=tf.float32)
                 adv = tf.convert_to_tensor(adv, dtype=tf.float32)
+                q_vals = tf.convert_to_tensor(q_vals[~np.isnan(q_vals)], dtype=tf.float32)
                 loss_dict = self._model.train_step(states, q_vals, adv, actions)
 
                 # Visualization
