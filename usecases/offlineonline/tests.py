@@ -4,7 +4,7 @@
     Main methods to train and test the methods.
 """
 
-from vpp_envs import SingleStepVPPEnv, MarkovianVPPEnv, SingleStepFullRLVPP, MarkovianRlVPPEnv
+from usecases.offlineonline.vpp_envs import SingleStepVPPEnv, MarkovianVPPEnv, SingleStepFullRLVPP, MarkovianRlVPPEnv
 import numpy as np
 import pandas as pd
 import garage
@@ -21,7 +21,7 @@ import cloudpickle
 import os
 import argparse
 from typing import Union, List
-from utility import timestamps_headers, my_wrap_experiment
+from helpers.utility import timestamps_headers, my_wrap_experiment
 
 ########################################################################################################################
 
@@ -325,8 +325,7 @@ def resume_experiment(ctxt, saved_dir):
 ########################################################################################################################
 
 
-if __name__ == '__main__':
-
+def main():
     # NOTE: you should set the logging directory and the method
     parser = argparse.ArgumentParser()
     parser.add_argument("logdir", type=str, help="Logging directory")

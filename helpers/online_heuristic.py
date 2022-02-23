@@ -14,7 +14,7 @@ from typing import Union, Tuple, List
 import warnings
 import argparse
 import os
-from utility import instances_preprocessing, timestamps_headers, min_max_scaler
+from helpers.utility import instances_preprocessing, timestamps_headers, min_max_scaler
 
 
 ########################################################################################################################
