@@ -338,8 +338,8 @@ if __name__ == '__main__':
                              + "'rl-single-step': end-to-end RL approach which directly provides the decision "
                              + "variables for all the stages;"
                              + "'rl-mdp': this is referred to as 'rl' in the paper.")
-    parser.add_argument("--epochs", type=int, help="Number of training epochs")
-    parser.add_argument("--batch-size", type=int, help="Batch size")
+    parser.add_argument("--epochs", type=int, help="Number of training epochs", required=True)
+    parser.add_argument("--batch-size", type=int, help="Batch size", required=True)
     parser.add_argument("--mode",
                         type=str,
                         choices=MODES,
@@ -353,9 +353,8 @@ if __name__ == '__main__':
 
     mode = args.mode
 
-    if mode == 'train':
-        EPOCHS = args.epochs
-        BATCH_SIZE = args.batch_size
+    EPOCHS = args.epochs
+    BATCH_SIZE = args.batch_size
 
     # Randomly choose 100 instances
     np.random.seed(0)
@@ -366,11 +365,11 @@ if __name__ == '__main__':
 
     if mode == 'train':
         # Training routing
-        for instance_idx in indexes:
+        for instance_idx in indexes[:1]:
             tf.compat.v1.disable_eager_execution()
             tf.compat.v1.reset_default_graph()
             run = my_wrap_experiment(train_rl_algo,
-                                     logging_dir=LOG_DIR)
+                                     logging_dir=os.path.join(LOG_DIR, str(instance_idx)))
 
             run(method=METHOD,
                 test_split=[instance_idx],
@@ -380,14 +379,14 @@ if __name__ == '__main__':
 
     elif mode == 'test':
         # Test trained methods
-        for idx in indexes:
-            test_rl_algo(log_dir=LOG_DIR,
+        for idx in indexes[:1]:
+            test_rl_algo(log_dir=os.path.join(LOG_DIR, str(idx)),
                          predictions_filepath=os.path.join('data', 'Dataset10k.csv'),
                          shifts_filepath=os.path.join('data', 'optShift.npy'),
                          prices_filepath=os.path.join('data', 'gmePrices.npy'),
                          method=METHOD,
                          test_split=[idx],
-                         num_episodes=1)
+                         num_episodes=EPOCHS)
 
     else:
         raise Exception(f"{mode} is not supported".format(mode))
