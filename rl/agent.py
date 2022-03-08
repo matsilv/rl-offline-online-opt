@@ -5,7 +5,8 @@
 """
 
 import numpy as np
-
+import pickle
+import os
 from rl.utility import calc_qvals
 from gym.spaces.discrete import Discrete
 from gym.spaces.box import Box
@@ -146,6 +147,14 @@ class OnPolicyAgent(DRLAgent):
         score = 0
         num_episodes = 0
 
+        # Keep track of the history
+        history = dict()
+        history['Number of episodes'] = list()
+        history['Steps'] = list()
+        history['Score'] = list()
+        history['Losses'] = list()
+        history['Avg score'] = list()
+
         while steps < num_steps:
 
             # Initialize the environment
@@ -217,9 +226,17 @@ class OnPolicyAgent(DRLAgent):
                 loss_dict = self._model.train_step(states, q_vals, adv, actions)
 
                 # Visualization
-                print_string = 'Frame: {}/{} | Total reward: {:.2f}'.format(steps, num_steps, score)
+                print_string = 'Step: {}/{} | Total reward: {:.2f}'.format(steps, num_steps, score)
                 print_string += ' | Total number of episodes: {} | Average score: {:.2f}'.format(num_episodes,
                                                                                                  score / num_episodes)
+
+                # Keep track of history
+                history['Number of episodes'].append(num_episodes)
+                history['Steps'].append(steps)
+                history['Score'].append(score)
+                history['Avg score'].append(score / num_episodes)
+                history['Losses'].append(loss_dict)
+
                 for loss_name, loss_value in loss_dict.items():
                     print_string += ' | {}: {:.5f} '.format(loss_name, loss_value)
 
@@ -235,8 +252,14 @@ class OnPolicyAgent(DRLAgent):
                 score = 0
                 num_episodes = 0
 
-        # Save model
+        # Save model and history
         if filename is not None:
-            self._model.save(filename)
+            model_savepath = os.path.join(filename, 'agent')
+            if not os.path.exists(model_savepath):
+                os.makedirs(model_savepath)
+
+            self._model.save(model_savepath)
+
+            pickle.dump(history, open(os.path.join(filename, 'history.pkl'), 'wb'))
 
 ########################################################################################################################

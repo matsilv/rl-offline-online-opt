@@ -9,6 +9,7 @@ from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import Dense, Input
 from tensorflow.keras.optimizers import Adam
 import tensorflow_probability as tfp
+import os
 from rl.utility import from_dict_of_tensor_to_numpy
 
 ########################################################################################################################
@@ -68,6 +69,14 @@ class DRLModel(tf.keras.Model):
         std_dev = self._actor_std_dev(hidden_state)
 
         return mean, std_dev
+
+    def save(self, savepath):
+        """
+
+        :param savepath: string; where the model is saved to.
+        :return:
+        """
+        super(DRLModel, self).save(savepath)
 
     @from_dict_of_tensor_to_numpy
     @tf.function
