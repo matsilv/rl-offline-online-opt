@@ -31,7 +31,9 @@ The experiments can be run launching the `tests.py` script. The arguments are th
   * `rl-single-step`: end-to-end RL approach which directly provides the decision variables for 
                       all the stages;
   * `rl-mdp`: this is referred to as `rl` in the paper.
-  
+* `--epochs`: the number of episodes; it is valid for both training and test.
+* `--batch-size`: the batch size.  
+
 The training routine is performed by the `train_rl_algo` method whereas the test is performed by
 the `test_rl_algo` method. Please, be sure to have a `data` with the following files:
 * `Dataset10k.csv`
